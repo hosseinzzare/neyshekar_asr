@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# PyTorch / HuggingFace Checkpoints & Logs
+whisper-large-v3-neyshekar-qlora/
+whisper-large-v3-neyshekar-qlora*/
+logs/
+runs/
+*.log
+
+# Jupyter & IDEs
+.ipynb_checkpoints
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS Junk
+.DS_Store
+Thumbs.db
