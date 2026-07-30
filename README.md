@@ -1,44 +1,43 @@
 # 🎙️ Neyshekar ASR - Whisper Large-v3 Fine-Tuning Pipeline (QLoRA 4-bit)
 
-پایپ‌لاین کامل، بهینه و تولیدی برای پیش‌پردازش داده‌های صوتی فارسی و آموزش مدل **Whisper Large-v3** با تکنیک **QLoRA (Quantized Low-Rank Adaptation)** و **4-Bit NF4 Quantization**.
+A production-ready, highly optimized end-to-end pipeline for Persian speech data preprocessing and fine-tuning **`openai/whisper-large-v3`** using **QLoRA (Quantized Low-Rank Adaptation)** and **4-Bit NF4 Quantization**.
 
 ---
 
-## 📌 ویژگی‌های کلیدی پروژه
+## 📌 Key Features
 
-1. **پیش‌پردازش و تمیزکاری داده‌ها (Task 1):**
-   - حذف همزادها و نمونه‌های تکراری صوتی و متنی (Exact & Approximate Deduplication).
-   - اعتبارسنجی فایل‌های صوتی (بررسی سلامت فایل، تعداد کانال، نرخ نمونه‌برداری ۱۶ کیلوهرتز).
-   - فیلترسازی نمونه‌های صوتی بر اساس نرخ گفتار (Speech Rate Filtering بین ۱.۵ تا ۲۲ کاراکتر بر ثانیه).
-   - نرمالسازی متنی اختصاصی فارسی (اصلاح نویسه‌های عربی، تبدیل اعداد به حروف، حذف علامت‌های نگارشی).
-   - تقسیم‌بندی عادلانه داده‌ها به **۸۵٪ آموزش (Train)** و **۱۵٪ ارزیابی (Validation)**.
+1. **Speech Preprocessing & Data Cleaning (Task 1):**
+   - **Deduplication:** Exact and approximate deduplication across audio and transcript samples.
+   - **Audio Validation:** Verifies audio integrity, sample rates (16 kHz mono), duration bounds, and corrupt file detection.
+   - **Speech Rate Filtering:** Filters out samples outside reasonable speech rates (1.5 to 22 characters per second).
+   - **Persian Text Normalization:** Arabic-to-Persian character conversion, digits-to-words transformation (`num2fawords`), punctuation stripping, and whitespace normalization.
+   - **Balanced Data Splitting:** Stratified split into **85% Training** (`data/train.csv`) and **15% Validation** (`data/val.csv`).
 
-2. **معماری آموزش QLoRA (Task 2):**
-   - بارگذاری مدل **`openai/whisper-large-v3`** با کوانتایزیشن ۴-بیتی NF4 توسط `bitsandbytes`.
-   - تزریق آداپتورهای **LoRA (PEFT)** روی تمام لایه‌های خطی کلیدی (`q_proj`, `v_proj`).
-   - ثبت هوک `make_inputs_require_grad` روی لایه `conv1` انکودر جهت تضمین محاسبه گرادیان در Gradient Checkpointing.
-   - پاکسازی کامل آرگومان‌های تداخلی `input_ids` در DataCollator و Wrapper پایداری اختصاصی PEFT.
-   - محاسبه خودکار معیارهای ارزیابی **WER (Word Error Rate)** و **CER (Character Error Rate)** همراه با نرمالسازی متنی.
-   - مدیریت مصرف حافظه VRAM (قابل اجرا روی GPU‌های حداقل 12GB مانند RTX 3060 / T4 / V100 / A100).
+2. **QLoRA Fine-Tuning Architecture (Task 2):**
+   - **4-Bit NF4 Quantization:** Loads base model `openai/whisper-large-v3` with `bitsandbytes` 4-bit quantization for minimal VRAM footprint (~10–12 GB VRAM required).
+   - **PEFT LoRA Adapters:** Injects low-rank adapters (`r=32`, `alpha=64`) targeting key attention projection layers (`q_proj`, `v_proj`).
+   - **Gradient Checkpointing Hook:** Registers `make_inputs_require_grad` forward hook on encoder `conv1` layer to enable gradient flow during QLoRA checkpointing.
+   - **PEFT+Whisper Keyword Collision Fix:** Includes custom `safe_base_forward` wrapper preventing `input_ids` parameter collision in `WhisperDecoder`.
+   - **Automated Evaluation Metrics:** Computes normalized **WER (Word Error Rate)** and **CER (Character Error Rate)** during training using Hugging Face `evaluate` and `jiwer`.
 
 ---
 
-## 📂 ساختار پروژه (Project Structure)
+## 📂 Project Structure
 
 ```text
 neyshekar_asr/
-├── config.py             # تنظیمات عمومی پروژه (Hyperparameters, Paths, Seed)
-├── data_prep.py          # ماژول اصلی اجرای Task 1 (پیش‌پردازش داده‌ها)
-├── dataset.py            # ماژول بارگذاری دیتاست و DataCollator برای Whisper
-├── model.py              # ساختار بارگذاری مدل QLoRA 4-Bit Whisper
-├── metrics.py            # تابع محاسبه معیارهای ارزیابی WER و CER
-├── train.py              # اسکریپت اصلی آموزش و مدیریت CLI
-├── requirements.txt      # پیش‌نیازها و کتابخانه‌های پایتون
-├── README.md             # مستندات و راهنمای اجرای پروژه
-├── data/                 # پوشه خروجی داده‌های پردازش‌شده
-│   ├── train.csv         # داده‌های آموزش (۸۵٪)
-│   └── val.csv           # داده‌های ارزیابی (۱۵٪)
-└── src/                  # سورس کدهای داخلی پایپ‌لاین
+├── config.py             # Global configurations (hyperparameters, file paths, random seed)
+├── data_prep.py          # Entry point for Task 1 (Data preprocessing and cleaning)
+├── dataset.py            # Dataset loader & Whisper DataCollator with dynamic padding
+├── model.py              # Whisper Large-v3 4-bit QLoRA model initialization
+├── metrics.py            # Evaluation metrics (WER & CER computation)
+├── train.py              # Entry point for Task 2 (Training pipeline & CLI args)
+├── requirements.txt      # PyPI Python dependencies
+├── README.md             # Project documentation
+├── data/                 # Directory containing preprocessed CSV files
+│   ├── train.csv         # Training dataset (85%)
+│   └── val.csv           # Validation dataset (15%)
+└── src/                  # Internal pipeline modules
     ├── config.py
     ├── data_prep.py
     ├── dataset.py
@@ -51,43 +50,43 @@ neyshekar_asr/
 
 ---
 
-## ⚡ راهنمای نصب و آماده‌سازی (Environment Setup)
+## ⚡ Setup & Installation
 
-### ۱. کلون کردن مخزن و نصب پیش‌نیازها
+### 1. Clone Repository & Install Dependencies
 
 ```bash
-# clone repository
-git clone https://github.com/YOUR_USERNAME/neyshekar_asr.git
+# Clone the repository
+git clone https://github.com/hosseinzzare/neyshekar_asr.git
 cd neyshekar_asr
 
-# create and activate virtual environment
+# Create and activate a Python virtual environment
 python -m venv .venv
-source .venv/bin/activate  # In Linux/Mac
+source .venv/bin/activate  # On Linux / macOS
 # or
-.venv\Scripts\activate     # In Windows
+.venv\Scripts\activate     # On Windows
 
-# install requirements
+# Install required dependencies
 pip install -r requirements.txt
 ```
 
 ---
 
-## 🚀 راهنمای اجرا (Execution Guide)
+## 🚀 Execution Guide
 
-### گام ۱: اجرای پیش‌پردازش داده‌ها (Task 1)
+### Step 1: Preprocess Data (Task 1)
 
-در صورتی که می‌خواهید داده‌های خام صوتی را از ابتدا پاکسازی و آماده کنید:
+If you wish to re-generate the cleaned datasets from raw CSV files:
 
 ```bash
 python data_prep.py
 ```
-> **خروجی:** فایل‌های `data/train.csv` (۸۵٪ داده‌ها) و `data/val.csv` (۱۵٪ داده‌ها) تولید می‌شوند.
+> **Output:** Generates `data/train.csv` (85%) and `data/val.csv` (15%).
 
 ---
 
-### گام ۲: اجرای تست سریع صحت کدهای آموزش (Smoke Test)
+### Step 2: Quick Smoke Test (30 Steps Verification)
 
-قبل از اجرای آموزش کامل، می‌توانید برای اطمینان از صحت تمام ماژول‌ها و عدم وقوع خطای OOM، آموزش را روی **۳۰ گام اول** اجرا کنید:
+To verify model initialization, CUDA memory management, and metric calculation prior to full training:
 
 ```bash
 python train.py --max_steps 30 --output_dir ./whisper-large-v3-smoke-test
@@ -95,9 +94,9 @@ python train.py --max_steps 30 --output_dir ./whisper-large-v3-smoke-test
 
 ---
 
-### گام ۳: اجرای آموزش کامل مدل روی GPU (Full Fine-Tuning)
+### Step 3: Full Fine-Tuning (Full Training Run)
 
-برای اجرای آموزش کامل روی تمام epochs:
+To run complete fine-tuning on all training epochs:
 
 ```bash
 python train.py --max_steps -1 --epochs 3 --output_dir ./whisper-large-v3-neyshekar-qlora
@@ -105,21 +104,22 @@ python train.py --max_steps -1 --epochs 3 --output_dir ./whisper-large-v3-neyshe
 
 ---
 
-## ⚙️ آرگومان‌های خط فرمان (CLI Arguments for `train.py`)
+## ⚙️ CLI Arguments (`train.py`)
 
-| آرگومان | مقدار پیش‌فرض | توضیحات |
+| Argument | Default | Description |
 | :--- | :--- | :--- |
-| `--max_steps` | `-1` | تعداد گام‌های آموزش (`-1` یعنی آموزش کامل تمام داده‌ها) |
-| `--epochs` | `3` | تعداد دوره‌های آموزش (Epochs) |
-| `--output_dir` | `./whisper-large-v3-neyshekar-qlora` | مسیر ذخیره‌سازی چک‌پوینت‌ها و مدل نهایی |
-| `--train_csv` | `data/train.csv` | مسیر فایل داده‌های آموزش |
-| `--val_csv` | `data/val.csv` | مسیر فایل داده‌های ارزیابی |
+| `--max_steps` | `-1` | Maximum training steps (`-1` for full training across all epochs) |
+| `--epochs` | `3` | Total number of training epochs |
+| `--output_dir` | `./whisper-large-v3-neyshekar-qlora` | Directory to save checkpoints and final model weights |
+| `--train_csv` | `data/train.csv` | Path to training CSV dataset |
+| `--val_csv` | `data/val.csv` | Path to validation CSV dataset |
 
 ---
 
-## 📊 معیارهای ارزیابی و گزارش‌گیری (Metrics & TensorBoard)
+## 📊 Training Metrics & Logging
 
-لاگ‌های آموزش و معیارهای WER و CER در مسیر `./logs` ذخیره می‌شوند. برای مشاهده زنده نمودارها در TensorBoard:
+Training metrics, loss curves, WER, and CER evaluation logs are saved under `./logs`.  
+To launch **TensorBoard**:
 
 ```bash
 tensorboard --logdir ./logs
@@ -127,10 +127,11 @@ tensorboard --logdir ./logs
 
 ---
 
-## 🛡️ عیب‌یابی و پایداری (Troubleshooting & Stability)
+## 🛡️ VRAM & Memory Efficiency
 
-- **پیشگیری از خطای OOM:** در صورت محدودیت VRAM، در `config.py` مقادیر `PER_DEVICE_TRAIN_BATCH_SIZE=8` و `GRADIENT_ACCUMULATION_STEPS=4` قرار داده شده‌اند تا حافظه مصرفی کاملاً کنترل شود.
-- **سازگاری PEFT با Whisper:** پچ اختصاصی `safe_base_forward` در `model.py` اعمال شده که تمام کلیدهای تداخلی `input_ids` را فیلتر کرده و پایداری کامل آموزش را تضمین می‌کند.
+- **Hardware Requirement:** Minimum **12 GB GPU VRAM** (e.g., RTX 3060, RTX 4070, T4, V100, A100).
+- **Default Batch Config:** `PER_DEVICE_TRAIN_BATCH_SIZE = 8` with `GRADIENT_ACCUMULATION_STEPS = 4` (effective batch size = 32).
+- **Gradient Checkpointing & Mixed Precision:** `FP16 = True` with gradient checkpointing enabled for peak memory optimization.
 
 ---
-**توسعه‌یافته برای سنجش و Fine-tuning مدل‌های گفتار به متن فارسی (Neyshekar ASR).**
+Developed for Persian Speech Recognition Assessment (Neyshekar ASR).
