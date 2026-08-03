@@ -13,6 +13,8 @@ from src.config import (
     VAL_CSV,
     OUTPUT_DIR,
     LOGS_DIR,
+    HF_DATASET_NAME,
+    MAP_WRITER_BATCH_SIZE,
     MODEL_NAME_OR_PATH,
     LANGUAGE,
     TASK,

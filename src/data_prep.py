@@ -31,7 +31,7 @@ RANDOM_SEED = 42
 TRAIN_RATIO = 0.85
 VAL_RATIO = 0.15
 MAX_COPIES_PER_LONG_TEXT = 3
-DATASET_PATH = r'E:\neyshekar dataset\data'
+DATASET_PATH = os.environ.get('NEYSHEKAR_RAW_DIR', os.path.join(os.path.dirname(__file__), '..', 'raw_data'))
 OUTPUT_DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
 
 
@@ -184,12 +184,17 @@ def prepare_and_save_data():
     train_df.to_csv(train_csv, index=False, encoding='utf-8-sig')
     val_df.to_csv(val_csv, index=False, encoding='utf-8-sig')
     
-    # Also save a copy on Drive E: for persistence
-    drive_e_dir = r'E:\neyshekar dataset\data_processed'
-    os.makedirs(drive_e_dir, exist_ok=True)
-    df_clean.to_csv(os.path.join(drive_e_dir, 'neyshekar_cleaned.csv'), index=False, encoding='utf-8-sig')
-    train_df.to_csv(os.path.join(drive_e_dir, 'train.csv'), index=False, encoding='utf-8-sig')
-    val_df.to_csv(os.path.join(drive_e_dir, 'val.csv'), index=False, encoding='utf-8-sig')
+    # Optionally save a backup copy if NEYSHEKAR_BACKUP_DIR is set
+    backup_dir = os.environ.get('NEYSHEKAR_BACKUP_DIR', None)
+    if backup_dir:
+        try:
+            os.makedirs(backup_dir, exist_ok=True)
+            df_clean.to_csv(os.path.join(backup_dir, 'neyshekar_cleaned.csv'), index=False, encoding='utf-8-sig')
+            train_df.to_csv(os.path.join(backup_dir, 'train.csv'), index=False, encoding='utf-8-sig')
+            val_df.to_csv(os.path.join(backup_dir, 'val.csv'), index=False, encoding='utf-8-sig')
+            print(f"Backup copy saved to: {backup_dir}")
+        except Exception as e:
+            print(f"[WARNING] Could not save backup to '{backup_dir}': {e}")
     
     # Summary Report
     print("\n" + "="*70)
@@ -206,7 +211,6 @@ def prepare_and_save_data():
     print(f"  --> Validation Set (15%):                 {len(val_df):,} records")
     print("="*70)
     print(f"Files saved successfully in project:\n  - {full_csv}\n  - {train_csv}\n  - {val_csv}")
-    print(f"Backup copy saved on Drive E:\n  - {os.path.join(drive_e_dir, 'neyshekar_cleaned.csv')}")
 
 
 if __name__ == '__main__':

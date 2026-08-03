@@ -20,6 +20,12 @@ A production-ready, highly optimized end-to-end pipeline for Persian speech data
    - **PEFT+Whisper Keyword Collision Fix:** Includes custom `safe_base_forward` wrapper preventing `input_ids` parameter collision in `WhisperDecoder`.
    - **Automated Evaluation Metrics:** Computes normalized **WER (Word Error Rate)** and **CER (Character Error Rate)** during training using Hugging Face `evaluate` and `jiwer`.
 
+3. **Data Loading Architecture:**
+   - **Audio:** Loaded from HuggingFace Hub (`shekar-ai/neyshekar-v5-persian-asr-fa`) which contains actual audio waveforms.
+   - **Text Labels:** Loaded from local CSV files (`data/train.csv`, `data/val.csv`) containing cleaned Persian transcripts from Task 1 pipeline.
+   - **Merge Strategy:** Samples are matched by `id` column between HF Hub audio and CSV text.
+   - **Memory Optimization:** Uses `writer_batch_size=500` during `dataset.map()` to flush Arrow cache to disk, preventing RAM OOM on large datasets.
+
 ---
 
 ## 📂 Project Structure
@@ -35,8 +41,8 @@ neyshekar_asr/
 ├── requirements.txt      # PyPI Python dependencies
 ├── README.md             # Project documentation
 ├── data/                 # Directory containing preprocessed CSV files
-│   ├── train.csv         # Training dataset (85%)
-│   └── val.csv           # Validation dataset (15%)
+│   ├── train.csv         # Training dataset (85%) — text labels only
+│   └── val.csv           # Validation dataset (15%) — text labels only
 └── src/                  # Internal pipeline modules
     ├── config.py
     ├── data_prep.py
@@ -69,13 +75,20 @@ source .venv/bin/activate  # On Linux / macOS
 pip install -r requirements.txt
 ```
 
+### 2. (Recommended) Set HuggingFace Token for Faster Downloads
+
+```bash
+export HF_TOKEN="your_huggingface_token_here"
+```
+> The training pipeline downloads audio data from HuggingFace Hub (`shekar-ai/neyshekar-v5-persian-asr-fa`). Setting `HF_TOKEN` enables higher rate limits and faster downloads.
+
 ---
 
 ## 🚀 Execution Guide
 
 ### Step 1: Preprocess Data (Task 1)
 
-If you wish to re-generate the cleaned datasets from raw CSV files:
+If you wish to re-generate the cleaned datasets from raw Parquet files:
 
 ```bash
 python data_prep.py
@@ -101,6 +114,8 @@ To run complete fine-tuning on all training epochs:
 ```bash
 python train.py --max_steps -1 --epochs 3 --output_dir ./whisper-large-v3-neyshekar-qlora
 ```
+
+> **Note:** On the first run, the Neyshekar dataset will be downloaded from HuggingFace Hub (~3-5 GB). Subsequent runs will use the cached copy.
 
 ---
 
@@ -129,9 +144,10 @@ tensorboard --logdir ./logs
 
 ## 🛡️ VRAM & Memory Efficiency
 
-- **Hardware Requirement:** Minimum **12 GB GPU VRAM** (e.g., RTX 3060, RTX 4070, T4, V100, A100).
-- **Default Batch Config:** `PER_DEVICE_TRAIN_BATCH_SIZE = 8` with `GRADIENT_ACCUMULATION_STEPS = 4` (effective batch size = 32).
+- **Hardware Requirement:** Minimum **12 GB GPU VRAM** (e.g., RTX 3060, RTX 4070, T4, L4, V100, A100) and **32+ GB System RAM**.
+- **Default Batch Config:** `PER_DEVICE_TRAIN_BATCH_SIZE = 8` with `GRADIENT_ACCUMULATION_STEPS = 2` (effective batch size = 16).
 - **Gradient Checkpointing & Mixed Precision:** `FP16 = True` with gradient checkpointing enabled for peak memory optimization.
+- **Dataset Processing:** Uses `writer_batch_size=500` during feature extraction to flush Arrow cache to disk, preventing RAM OOM.
 
 ---
 Developed for Persian Speech Recognition Assessment (Neyshekar ASR).

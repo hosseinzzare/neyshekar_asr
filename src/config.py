@@ -23,6 +23,12 @@ class Config:
     LOGS_DIR = "./logs"
 
     # -------------------------------------------------------------
+    # 2b. HuggingFace Hub Dataset Source (for audio loading)
+    # -------------------------------------------------------------
+    HF_DATASET_NAME = "shekar-ai/neyshekar-v4-persian-asr-fa"
+    MAP_WRITER_BATCH_SIZE = 500  # Flush Arrow cache every N samples to prevent OOM during .map()
+
+    # -------------------------------------------------------------
     # 3. Model & Language Settings
     # -------------------------------------------------------------
     MODEL_NAME_OR_PATH = "openai/whisper-large-v3"
@@ -89,6 +95,8 @@ TRAIN_CSV = Config.TRAIN_CSV
 VAL_CSV = Config.VAL_CSV
 OUTPUT_DIR = Config.OUTPUT_DIR
 LOGS_DIR = Config.LOGS_DIR
+HF_DATASET_NAME = Config.HF_DATASET_NAME
+MAP_WRITER_BATCH_SIZE = Config.MAP_WRITER_BATCH_SIZE
 
 MODEL_NAME_OR_PATH = Config.MODEL_NAME_OR_PATH
 LANGUAGE = Config.LANGUAGE
