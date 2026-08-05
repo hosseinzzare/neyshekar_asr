@@ -162,20 +162,32 @@ def load_custom_dataset(
     Loads training and validation datasets by:
     1. Loading the full Neyshekar dataset from HuggingFace Hub (audio stays lazy-loaded via Arrow).
     2. Loading cleaned text labels from local CSV files (produced by Task 1 pipeline).
-    3. Matching HF samples with CSV entries by TEXT CONTENT (not ID).
-       This is necessary because CSV IDs (from local Parquet v5) don't match HF Hub v4 IDs.
+    3. Matching HF samples with CSV entries by TEXT CONTENT (not ID), respecting the EXACT
+       per-text duplicate counts that Task 1's dedup/downsampling logic decided to keep.
+       This is necessary because CSV IDs (from the local raw Parquet used for Task 1) don't
+       reliably match HF Hub IDs.
 
-    MATCHING STRATEGY:
+    WHY "IN SET" MEMBERSHIP MATCHING IS WRONG:
+        A naive `hf_dataset.filter(lambda x: x['text'] in known_texts)` keeps EVERY HF row whose
+        text appears anywhere in the CSV, regardless of how many times that text was capped/dropped
+        during Task 1's duplicate downsampling (e.g. long sentences repeated >3 times were capped
+        to 3 copies). Since membership is a set check, all 5, 10, etc. duplicate audio rows for a
+        repeated sentence would silently pass through, reintroducing exactly the over-representation
+        Task 1 intentionally removed.
+
+    MATCHING STRATEGY (order-preserving, count-aware):
         - CSV contains 'text_raw' (original text) and 'cleaned_text' (normalized text).
         - HF Hub contains 'text' (original text) and 'audio'.
-        - We match HF 'text' == CSV 'text_raw' to pair audio with cleaned labels.
-
-    MEMORY OPTIMIZATION:
-        Audio data remains lazy-loaded by Apache Arrow until .map(prepare_dataset) reads it.
+        - We count how many times each raw text appears in train.csv / val.csv (Counter).
+        - We walk the HF dataset once, in order, and only accept up to that many occurrences
+          of each text (first N go to train, next M go to validation, any further duplicates
+          beyond N+M are skipped) — mirroring the exact row-level dedup decision from Task 1.
 
     Returns:
         DatasetDict with 'train' and 'validation' splits.
     """
+    from collections import Counter
+
     # 1. Validate CSV files exist
     if not os.path.exists(train_csv):
         raise FileNotFoundError(f"Train CSV not found at: {train_csv}")
@@ -188,24 +200,31 @@ def load_custom_dataset(
     print(f"[DATASET LOAD] Loading Val CSV from {val_csv}...")
     val_df = pd.read_csv(val_csv)
 
-    # 3. Build text-based lookups: raw_text -> (cleaned_text, split)
-    #    Using text_raw as the join key between CSV and HF dataset
-    train_text_lookup = {}
+    # 3. Build per-text occurrence counts + cleaned-text lookup for each split.
+    #    Counting (not just set membership) is what lets us respect Task 1's duplicate caps.
+    train_text_counts: Counter = Counter()
+    train_cleaned_map = {}
     for _, row in train_df.iterrows():
         raw = str(row.get('text_raw', '')).strip()
         cleaned = str(row.get('cleaned_text', raw)).strip()
         if raw:
-            train_text_lookup[raw] = cleaned
+            train_text_counts[raw] += 1
+            train_cleaned_map[raw] = cleaned
 
-    val_text_lookup = {}
+    val_text_counts: Counter = Counter()
+    val_cleaned_map = {}
     for _, row in val_df.iterrows():
         raw = str(row.get('text_raw', '')).strip()
         cleaned = str(row.get('cleaned_text', raw)).strip()
         if raw:
-            val_text_lookup[raw] = cleaned
+            val_text_counts[raw] += 1
+            val_cleaned_map[raw] = cleaned
 
-    all_texts = set(train_text_lookup.keys()) | set(val_text_lookup.keys())
-    print(f"[DATASET LOAD] Train texts: {len(train_text_lookup):,}, Val texts: {len(val_text_lookup):,}, Total unique texts: {len(all_texts):,}")
+    needed_texts = set(train_text_counts) | set(val_text_counts)
+    total_needed = sum(train_text_counts.values()) + sum(val_text_counts.values())
+    print(f"[DATASET LOAD] Train rows: {sum(train_text_counts.values()):,} "
+          f"({len(train_text_counts):,} unique texts), "
+          f"Val rows: {sum(val_text_counts.values()):,} ({len(val_text_counts):,} unique texts)")
 
     # 4. Load full HuggingFace Hub dataset (audio stays lazy-loaded by Arrow)
     print(f"[HF HUB] Loading audio dataset from HuggingFace Hub: '{hf_dataset_name}'...")
@@ -218,60 +237,70 @@ def load_custom_dataset(
     print(f"[HF HUB] Loaded {len(hf_dataset):,} samples from HuggingFace Hub.")
     print(f"[HF HUB] HF Dataset columns: {hf_dataset.column_names}")
 
-    # 5. Filter HF dataset to only include texts present in our cleaned CSV
-    print("[FILTER] Filtering HF dataset by text content matching...")
-    hf_filtered = hf_dataset.filter(
-        lambda x: x['text'].strip() in all_texts,
-        desc="Filtering by text match"
-    )
-    print(f"[FILTER] After filtering: {len(hf_filtered):,} samples matched (from {len(hf_dataset):,} total in HF Hub)")
+    # 5. Single ordered pass over HF text column: assign each occurrence of a text to
+    #    train / validation / dropped, capped exactly at the counts decided in Task 1's CSVs.
+    #    Using .select(indices) instead of .filter(lambda) keeps this deterministic and avoids
+    #    reintroducing duplicates via naive set-membership filtering.
+    print("[MATCH] Scanning HF dataset once to assign rows by exact per-text duplicate counts...")
+    seen_counts: Counter = Counter()
+    train_indices = []
+    val_indices = []
+    skipped_excess_duplicates = 0
+    for i, text in enumerate(hf_dataset["text"]):
+        t = str(text).strip()
+        if t not in needed_texts:
+            continue
+        tc = train_text_counts.get(t, 0)
+        vc = val_text_counts.get(t, 0)
+        seen = seen_counts[t]
+        if seen < tc:
+            train_indices.append(i)
+        elif seen < tc + vc:
+            val_indices.append(i)
+        else:
+            # This text already has as many audio rows assigned as Task 1's CSV kept for it.
+            # Any further occurrence is an excess duplicate that Task 1 intentionally dropped.
+            skipped_excess_duplicates += 1
+            continue
+        seen_counts[t] += 1
 
-    if len(hf_filtered) == 0:
-        # Print diagnostic info to help debug
-        hf_sample_texts = [hf_dataset[i]['text'][:60] for i in range(min(5, len(hf_dataset)))]
-        csv_sample_texts = list(train_text_lookup.keys())[:5]
+    matched_total = len(train_indices) + len(val_indices)
+    print(f"[MATCH] Matched {matched_total:,} / {total_needed:,} rows needed by the CSVs "
+          f"(skipped {skipped_excess_duplicates:,} excess duplicates beyond Task 1's caps).")
+
+    if matched_total == 0:
+        hf_sample_texts = [str(hf_dataset[i]['text'])[:60] for i in range(min(5, len(hf_dataset)))]
+        csv_sample_texts = list(train_cleaned_map.keys())[:5]
         raise ValueError(
             f"No matching texts found between CSV and HF dataset!\n"
             f"  CSV text_raw samples: {csv_sample_texts}\n"
             f"  HF text samples: {hf_sample_texts}\n"
-            f"  Check that CSV 'text_raw' column matches HF 'text' column."
+            f"  Check that CSV 'text_raw' column matches HF 'text' column, and that "
+            f"HF_DATASET_NAME points to the same dataset version used to build the raw "
+            f"parquet files for Task 1."
         )
+    if matched_total < total_needed:
+        missing = total_needed - matched_total
+        print(f"[MATCH][WARNING] {missing:,} CSV rows had no corresponding audio row in "
+              f"'{hf_dataset_name}'. This usually means HF_DATASET_NAME is a different "
+              f"version than the raw data used for Task 1 cleaning. Training will proceed "
+              f"with the {matched_total:,} rows that did match, but investigate this before "
+              f"treating results as final.")
 
-    # 6. Add cleaned_text column by looking up each sample's text in our CSV lookup
-    def _add_cleaned_text_and_split(sample):
-        raw_text = sample['text'].strip()
-        if raw_text in train_text_lookup:
-            sample['cleaned_text'] = train_text_lookup[raw_text]
-            sample['_split'] = 'train'
-        elif raw_text in val_text_lookup:
-            sample['cleaned_text'] = val_text_lookup[raw_text]
-            sample['_split'] = 'validation'
-        else:
-            sample['cleaned_text'] = raw_text
-            sample['_split'] = 'unknown'
+    train_dataset = hf_dataset.select(train_indices)
+    val_dataset = hf_dataset.select(val_indices)
+
+    # 6. Attach cleaned_text column via direct dict lookup (fast, order already fixed by .select)
+    def _attach_train_text(sample):
+        sample['cleaned_text'] = train_cleaned_map[str(sample['text']).strip()]
         return sample
 
-    hf_with_text = hf_filtered.map(
-        _add_cleaned_text_and_split,
-        desc="Adding cleaned text labels"
-    )
+    def _attach_val_text(sample):
+        sample['cleaned_text'] = val_cleaned_map[str(sample['text']).strip()]
+        return sample
 
-    # 7. Split into train and validation by the _split tag
-    print("[SPLIT] Splitting into train and validation by text membership...")
-    train_dataset = hf_with_text.filter(
-        lambda x: x['_split'] == 'train',
-        desc="Selecting train samples"
-    )
-    val_dataset = hf_with_text.filter(
-        lambda x: x['_split'] == 'validation',
-        desc="Selecting validation samples"
-    )
-
-    # Remove the temporary _split column
-    if '_split' in train_dataset.column_names:
-        train_dataset = train_dataset.remove_columns(['_split'])
-    if '_split' in val_dataset.column_names:
-        val_dataset = val_dataset.remove_columns(['_split'])
+    train_dataset = train_dataset.map(_attach_train_text, desc="Attaching cleaned_text (train)")
+    val_dataset = val_dataset.map(_attach_val_text, desc="Attaching cleaned_text (val)")
 
     print(f"[SPLIT] Train: {len(train_dataset):,} samples, Validation: {len(val_dataset):,} samples")
 

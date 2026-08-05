@@ -21,7 +21,7 @@ A production-ready, highly optimized end-to-end pipeline for Persian speech data
    - **Automated Evaluation Metrics:** Computes normalized **WER (Word Error Rate)** and **CER (Character Error Rate)** during training using Hugging Face `evaluate` and `jiwer`.
 
 3. **Data Loading Architecture:**
-   - **Audio:** Loaded from HuggingFace Hub (`shekar-ai/neyshekar-v5-persian-asr-fa`) which contains actual audio waveforms.
+   - **Audio:** Loaded from HuggingFace Hub (`shekar-ai/neyshekar-v4-persian-asr-fa`) which contains actual audio waveforms.
    - **Text Labels:** Loaded from local CSV files (`data/train.csv`, `data/val.csv`) containing cleaned Persian transcripts from Task 1 pipeline.
    - **Merge Strategy:** Samples are matched by `id` column between HF Hub audio and CSV text.
    - **Memory Optimization:** Uses `writer_batch_size=500` during `dataset.map()` to flush Arrow cache to disk, preventing RAM OOM on large datasets.
@@ -80,7 +80,7 @@ pip install -r requirements.txt
 ```bash
 export HF_TOKEN="your_huggingface_token_here"
 ```
-> The training pipeline downloads audio data from HuggingFace Hub (`shekar-ai/neyshekar-v5-persian-asr-fa`). Setting `HF_TOKEN` enables higher rate limits and faster downloads.
+> The training pipeline downloads audio data from HuggingFace Hub (`shekar-ai/neyshekar-v4-persian-asr-fa`). Setting `HF_TOKEN` enables higher rate limits and faster downloads.
 
 ---
 
