@@ -271,7 +271,16 @@ def run_training_pipeline(args=None):
     if use_quantization:
         use_fp16, use_bf16 = config.FP16, False
     else:
-        want_bf16 = config.USE_BF16_WHEN_UNQUANTIZED and torch.cuda.is_bf16_supported()
+        # Detect bf16 via compute capability rather than torch.cuda.is_bf16_supported():
+        # that helper can report False when CUDA has not been initialised yet, which silently
+        # downgraded an Ada-class L4 (SM 8.9) to fp16. bf16 needs SM 8.0+ (Ampere and newer).
+        bf16_capable = False
+        if torch.cuda.is_available():
+            major, minor = torch.cuda.get_device_capability()
+            bf16_capable = major >= 8
+            print(f"[PRECISION] GPU {torch.cuda.get_device_name(0)} "
+                  f"(compute capability {major}.{minor}) -> bf16 {'supported' if bf16_capable else 'NOT supported'}")
+        want_bf16 = config.USE_BF16_WHEN_UNQUANTIZED and bf16_capable
         use_fp16, use_bf16 = (False, True) if want_bf16 else (True, False)
     print(f"[PRECISION] quantization={'4-bit NF4' if use_quantization else 'OFF'} | "
           f"fp16={use_fp16} | bf16={use_bf16}")

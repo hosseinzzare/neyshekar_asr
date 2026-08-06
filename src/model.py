@@ -55,7 +55,8 @@ def get_whisper_qlora_model(
         raise RuntimeError("PyTorch, Transformers, or PEFT not installed.")
 
     config.set_seed(config.SEED)
-    print(f"\n[MODEL LOAD] Loading base model '{model_name_or_path}' with 4-bit QLoRA...")
+    print(f"\n[MODEL LOAD] Loading base model '{model_name_or_path}' "
+          f"({'4-bit QLoRA' if use_quantization else 'LoRA, no quantization'})...")
 
     # 1-2. Load the base model, quantized or not.
     #
@@ -78,17 +79,21 @@ def get_whisper_qlora_model(
         )
         print("[QUANTIZATION] 4-bit NF4 ENABLED (~0.9 GB weights, dequantization overhead per step)")
     else:
-        dtype = torch.bfloat16 if config.USE_BF16_WHEN_UNQUANTIZED else torch.float16
-        if dtype is torch.bfloat16 and not torch.cuda.is_bf16_supported():
-            print("[QUANTIZATION][WARNING] bf16 unsupported on this GPU; falling back to fp16.")
-            dtype = torch.float16
+        # Load in fp32 and let the Trainer's autocast provide mixed precision.
+        #
+        # Do NOT load 16-bit weights here. The data collator emits float32 input_features, and
+        # when the model is already 16-bit the Trainer skips its autocast wrapper (it assumes
+        # pure 16-bit training) -- the fp32 input then meets a half-precision conv1 and raises
+        # "Input type (float) and bias type (c10::Half) should be the same".
+        # With fp32 weights + bf16 autocast, matmuls still run on tensor cores at 16-bit speed,
+        # every cast is handled automatically, and the LoRA parameters stay fp32 so the
+        # optimizer remains numerically stable.
         model = WhisperForConditionalGeneration.from_pretrained(
             model_name_or_path,
-            dtype=dtype,
             device_map="auto"
         )
-        print(f"[QUANTIZATION] DISABLED -- full {str(dtype).split('.')[-1]} weights (~3.1 GB), "
-              f"no dequantization overhead, LoRA adapts EXACT weights")
+        print("[QUANTIZATION] DISABLED -- fp32 weights (~6.2 GB) with autocast mixed precision, "
+              "no dequantization overhead, LoRA adapts EXACT weights")
 
     # 3. Prepare Model for Training & Adjust Config Flags
     #

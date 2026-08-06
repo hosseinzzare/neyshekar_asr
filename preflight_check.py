@@ -121,7 +121,20 @@ check("quantization can be disabled", must_contain(md, "if use_quantization:"))
 check("kbit prep only used for quantized models",
       must_contain(md, "model.gradient_checkpointing_enable()"),
       "unquantized path must enable checkpointing itself")
-check("bf16 hardware support is checked", must_contain(md, "is_bf16_supported()"))
+tr_precision = read("src/train.py")
+# torch.cuda.is_bf16_supported() can return False before CUDA is initialised, which silently
+# downgraded an Ada L4 to fp16. Compute capability is the reliable signal (bf16 needs SM 8.0+).
+check("bf16 detected via compute capability, not is_bf16_supported()",
+      must_contain(tr_precision, "get_device_capability()"))
+# Loading 16-bit weights makes the Trainer skip its autocast wrapper, so fp32 input_features
+# then hit half-precision conv1 -> "Input type (float) and bias type (c10::Half)".
+if md and "else:" in md:
+    _s = md.find("    else:\n        # Load in fp32")
+    _e = md.find("# 3. Prepare Model for Training")
+    unquant_branch = md[_s:_e] if 0 <= _s < _e else ""
+    check("unquantized path loads fp32 weights (autocast handles precision)",
+          bool(unquant_branch) and "dtype=" not in unquant_branch,
+          "16-bit weights + fp32 inputs raise a dtype mismatch in conv1")
 
 mt = read("src/metrics.py")
 check("empty-reference guard in metrics (jiwer crash)",

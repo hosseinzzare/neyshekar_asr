@@ -68,9 +68,10 @@ class Config:
     BNB_4BIT_COMPUTE_DTYPE = "float16"
     BNB_4BIT_USE_DOUBLE_QUANT = True
 
-    # Compute dtype used when quantization is OFF. bf16 has the same exponent range as fp32, so
-    # it needs no loss scaling and is more numerically stable than fp16; Ada (L4) supports it
-    # natively at full speed.
+    # Autocast dtype used when quantization is OFF. The weights stay fp32 (so LoRA and the
+    # optimizer are numerically stable) while matmuls run at 16-bit on tensor cores. bf16 has
+    # the same exponent range as fp32, so it needs no loss scaling; requires SM 8.0+ (Ampere
+    # and newer -- the L4 is SM 8.9).
     USE_BF16_WHEN_UNQUANTIZED = True
     
     LORA_R = 32
