@@ -62,6 +62,89 @@ def parse_args():
         default=config.OUTPUT_DIR,
         help="Directory to save fine-tuned model checkpoints"
     )
+    parser.add_argument(
+        "--eval_steps",
+        type=int,
+        default=None,
+        help=(
+            "Override evaluation frequency. If not set: uses config.EVAL_STEPS for full runs, "
+            "but is auto-scaled down for smoke tests (--max_steps > 0) so that at least one "
+            "eval/generate/checkpoint cycle actually runs during the smoke test. This matters "
+            "because config.EVAL_STEPS=100 would never trigger during e.g. --max_steps 30, "
+            "silently skipping the eval + WER/CER + save-best-checkpoint code path."
+        )
+    )
+    parser.add_argument(
+        "--save_steps",
+        type=int,
+        default=None,
+        help="Override checkpoint-save frequency. Same auto-scaling behavior as --eval_steps."
+    )
+    parser.add_argument(
+        "--max_eval_samples",
+        type=int,
+        default=config.MAX_EVAL_SAMPLES,
+        help=(
+            "Number of validation rows used for PERIODIC in-training evaluation. Each eval runs "
+            "autoregressive generate(), so the full 5,900-row split costs hours across a 3-epoch "
+            "run. Pass -1 to always evaluate on the full split."
+        )
+    )
+    parser.add_argument(
+        "--max_shards",
+        type=int,
+        default=None,
+        help=(
+            "Download only the first N of the 15 parquet shards (~485 MB each) instead of the full "
+            "~7.3 GB. Intended for Colab smoke tests, where downloading everything just to keep "
+            "1,000 samples is wasteful. NEVER use this for the real 3-epoch run or reported metrics."
+        )
+    )
+    # ---- throughput knobs (see the efficiency ablation in the README) ----
+    parser.add_argument(
+        "--no_gradient_checkpointing",
+        action="store_true",
+        help=(
+            "Disable gradient checkpointing. Trades VRAM for ~1.3-1.5x faster training with "
+            "IDENTICAL gradients, so model quality is unaffected. Needs more memory: safe on a "
+            "24 GB L4, likely OOM on a 16 GB T4."
+        )
+    )
+    parser.add_argument(
+        "--train_batch_size",
+        type=int,
+        default=config.PER_DEVICE_TRAIN_BATCH_SIZE,
+        help="Per-device train batch size. Keep train_batch_size * grad_accum == 16 to preserve "
+             "the validated effective batch size and learning-rate recipe."
+    )
+    parser.add_argument(
+        "--grad_accum",
+        type=int,
+        default=config.GRADIENT_ACCUMULATION_STEPS,
+        help="Gradient accumulation steps. See --train_batch_size."
+    )
+    parser.add_argument(
+        "--eval_batch_size",
+        type=int,
+        default=config.PER_DEVICE_EVAL_BATCH_SIZE,
+        help="Per-device eval batch size. Affects evaluation SPEED ONLY -- it cannot change "
+             "WER/CER, so raise it as far as VRAM allows."
+    )
+    parser.add_argument(
+        "--dataloader_workers",
+        type=int,
+        default=config.DATALOADER_NUM_WORKERS,
+        help="Worker processes for the dataloader (0 = load in the main process)."
+    )
+    parser.add_argument(
+        "--final_full_eval",
+        action="store_true",
+        help=(
+            "After training, run one final evaluation on the FULL validation set and save the "
+            "result to final_eval_metrics.json. Use this for the numbers you report, so the "
+            "headline WER/CER are not based on a subset."
+        )
+    )
     return parser.parse_args()
 
 
@@ -91,15 +174,76 @@ def run_training_pipeline(args=None):
     print("="*70 + "\n")
 
     # 2. Prepare Datasets, Processor, and Data Collator (enable subset mode if max_steps is set for fast Colab smoke testing)
-    max_samples = 1000 if (args.max_steps is not None and args.max_steps > 0) else None
+    is_smoke_test = args.max_steps is not None and args.max_steps > 0
+    max_samples = 1000 if is_smoke_test else None
     train_dataset, val_dataset, processor, data_collator = get_datasets_and_collator(
         train_csv=args.train_csv,
         val_csv=args.val_csv,
-        max_samples=max_samples
+        max_samples=max_samples,
+        max_shards=args.max_shards
     )
 
+    # Guard against accidentally producing "final" numbers from a partial download.
+    if args.max_shards and not is_smoke_test:
+        print("\n[WARNING] --max_shards is set on a FULL training run. Only part of the corpus was "
+              "downloaded, so these results are NOT reportable. Remove --max_shards for the real run.\n")
+
+    # 2b. Resolve eval/save step frequency.
+    #     IMPORTANT: config.EVAL_STEPS/SAVE_STEPS default to 100, which is larger than a typical
+    #     smoke-test run (e.g. --max_steps 30). If left as-is, the smoke test would finish without
+    #     ever triggering an eval/generate/WER-CER/checkpoint-save cycle -- exactly the code paths
+    #     most likely to hide a bug (predict_with_generate, compute_metrics, best-model selection).
+    #     So unless explicitly overridden, we auto-scale eval/save steps down during smoke tests.
+    if args.eval_steps is not None:
+        eval_steps = args.eval_steps
+    elif is_smoke_test:
+        eval_steps = max(1, args.max_steps // 3)
+    else:
+        eval_steps = config.EVAL_STEPS
+
+    if args.save_steps is not None:
+        save_steps = args.save_steps
+    else:
+        # load_best_model_at_end requires save_steps to be a round multiple of eval_steps
+        save_steps = eval_steps if is_smoke_test else config.SAVE_STEPS
+
+    if is_smoke_test:
+        print(f"[SMOKE TEST] Auto-scaled eval_steps={eval_steps}, save_steps={save_steps} "
+              f"(max_steps={args.max_steps}) so the eval/WER/CER/checkpoint path is actually "
+              f"exercised, not just the training loss path.")
+
+    # 2c. Optionally subsample the validation set used for PERIODIC evaluation.
+    #     Kept separate from the full split so the final reported metrics can still be computed
+    #     over everything (see --final_full_eval below).
+    full_val_dataset = val_dataset
+    if args.max_eval_samples is not None and args.max_eval_samples > 0 \
+            and len(val_dataset) > args.max_eval_samples:
+        # Shuffle with the global seed before selecting, so the subset is a representative random
+        # sample rather than the first N rows, yet is identical on every run (reproducibility).
+        val_dataset = val_dataset.shuffle(seed=config.SEED).select(range(args.max_eval_samples))
+        print(f"[EVAL SUBSET] Periodic evaluation will use {len(val_dataset):,} of "
+              f"{len(full_val_dataset):,} validation rows (deterministic, seed={config.SEED}). "
+              f"Use --final_full_eval to report final metrics on the full split.")
+
+    # 2d. Resolve throughput settings and guard the effective batch size.
+    #     Effective batch = train_batch_size * grad_accum. The learning-rate recipe (1e-3 with
+    #     50 warmup steps) was validated at effective batch 16; changing that number changes the
+    #     optimisation dynamics, so redistributing 16 across batch/accumulation is safe but
+    #     changing the product is not. Warn loudly rather than silently altering the recipe.
+    use_gradient_checkpointing = config.GRADIENT_CHECKPOINTING and not args.no_gradient_checkpointing
+    effective_batch = args.train_batch_size * args.grad_accum
+    print(f"[THROUGHPUT] train_batch={args.train_batch_size} x grad_accum={args.grad_accum} "
+          f"-> effective batch = {effective_batch} | eval_batch={args.eval_batch_size} | "
+          f"dataloader_workers={args.dataloader_workers}")
+    if effective_batch != config.PER_DEVICE_TRAIN_BATCH_SIZE * config.GRADIENT_ACCUMULATION_STEPS:
+        print(f"[THROUGHPUT][WARNING] Effective batch is {effective_batch}, not "
+              f"{config.PER_DEVICE_TRAIN_BATCH_SIZE * config.GRADIENT_ACCUMULATION_STEPS}. This "
+              f"CHANGES the optimisation recipe -- the learning rate ({config.LEARNING_RATE}) was "
+              f"tuned for the original value and should be rescaled. Results are not directly "
+              f"comparable to the baseline configuration.")
+
     # 3. Load QLoRA Quantized Model
-    model = get_whisper_qlora_model()
+    model = get_whisper_qlora_model(use_gradient_checkpointing=use_gradient_checkpointing)
 
     # 4. Prepare Compute Metrics Function
     compute_metrics_fn = get_compute_metrics_fn(processor=processor)
@@ -107,20 +251,21 @@ def run_training_pipeline(args=None):
     # 5. Define Seq2Seq Training Arguments
     training_args = Seq2SeqTrainingArguments(
         output_dir=args.output_dir,
-        per_device_train_batch_size=config.PER_DEVICE_TRAIN_BATCH_SIZE,
-        per_device_eval_batch_size=config.PER_DEVICE_EVAL_BATCH_SIZE,
-        gradient_accumulation_steps=config.GRADIENT_ACCUMULATION_STEPS,
+        per_device_train_batch_size=args.train_batch_size,
+        per_device_eval_batch_size=args.eval_batch_size,
+        gradient_accumulation_steps=args.grad_accum,
+        dataloader_num_workers=args.dataloader_workers,
         learning_rate=config.LEARNING_RATE,
         warmup_steps=config.WARMUP_STEPS,
         num_train_epochs=args.epochs,
         max_steps=args.max_steps,
         fp16=config.FP16,
-        gradient_checkpointing=config.GRADIENT_CHECKPOINTING,
+        gradient_checkpointing=use_gradient_checkpointing,
         predict_with_generate=True,
         generation_max_length=225,
         eval_strategy=config.EVAL_STRATEGY,
-        eval_steps=config.EVAL_STEPS,
-        save_steps=config.SAVE_STEPS,
+        eval_steps=eval_steps,
+        save_steps=save_steps,
         save_total_limit=config.SAVE_TOTAL_LIMIT,
         metric_for_best_model=config.METRIC_FOR_BEST_MODEL,
         greater_is_better=config.GREATER_IS_BETTER,
@@ -163,6 +308,18 @@ def run_training_pipeline(args=None):
     trainer.log_metrics("train", metrics)
     trainer.save_metrics("train", metrics)
     trainer.save_state()
+
+    # 9. Optional final evaluation on the FULL validation split.
+    #    Periodic evals may have run on a subset for speed; these are the numbers worth reporting.
+    if args.final_full_eval and len(full_val_dataset) > len(val_dataset):
+        print(f"\n[FINAL EVAL] Evaluating best model on the FULL validation set "
+              f"({len(full_val_dataset):,} rows). This runs generate() over every row and will "
+              f"take a while...")
+        final_metrics = trainer.evaluate(eval_dataset=full_val_dataset, metric_key_prefix="final")
+        trainer.log_metrics("final", final_metrics)
+        trainer.save_metrics("final", final_metrics)
+        print(f"[FINAL EVAL] Full-validation results: "
+              f"WER={final_metrics.get('final_wer')}%, CER={final_metrics.get('final_cer')}%")
 
     print("\n" + "="*70)
     print(" === TRAINING COMPLETED SUCCESSFULLY ===")

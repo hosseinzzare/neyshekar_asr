@@ -23,7 +23,7 @@ A production-ready, highly optimized end-to-end pipeline for Persian speech data
 3. **Data Loading Architecture:**
    - **Audio:** Loaded from HuggingFace Hub (`shekar-ai/neyshekar-v4-persian-asr-fa`) which contains actual audio waveforms.
    - **Text Labels:** Loaded from local CSV files (`data/train.csv`, `data/val.csv`) containing cleaned Persian transcripts from Task 1 pipeline.
-   - **Merge Strategy:** Samples are matched by `id` column between HF Hub audio and CSV text.
+   - **Merge Strategy:** Samples are matched by the unique `id` primary key between HF Hub audio and CSV text. `id` is unique across all 39,332 cleaned rows, whereas ~59% of rows share a duplicated transcript — so text-based joining cannot identify which audio clip belongs to which row and is not used.
    - **Memory Optimization:** Uses `writer_batch_size=500` during `dataset.map()` to flush Arrow cache to disk, preventing RAM OOM on large datasets.
 
 ---
@@ -91,9 +91,15 @@ export HF_TOKEN="your_huggingface_token_here"
 If you wish to re-generate the cleaned datasets from raw Parquet files:
 
 ```bash
+# Point this at the directory holding the 15 raw train-*.parquet files
+export NEYSHEKAR_RAW_DIR="/path/to/neyshekar dataset"    # Windows: set NEYSHEKAR_RAW_DIR=E:\neyshekar dataset
+
 python data_prep.py
 ```
 > **Output:** Generates `data/train.csv` (85%) and `data/val.csv` (15%).
+>
+> The committed CSVs are already the cleaned output (33,432 train + 5,900 val = 39,332 rows from
+> 40,008 raw). Re-running is only needed if you change the cleaning rules.
 
 ---
 
@@ -102,8 +108,27 @@ python data_prep.py
 To verify model initialization, CUDA memory management, and metric calculation prior to full training:
 
 ```bash
-python train.py --max_steps 30 --output_dir ./whisper-large-v3-smoke-test
+# Colab-friendly: downloads only 2 of 15 shards (~1 GB instead of ~7.3 GB)
+python train.py --max_steps 30 --max_shards 2 --output_dir ./whisper-large-v3-smoke-test
 ```
+
+`--max_shards N` limits the download to the first N parquet shards. Without it, a 1,000-sample
+smoke test still pulls the full ~7.3 GB before discarding ~97% of it. Two shards yield ~4,500 train
+and ~816 validation rows — plenty to exercise the pipeline.
+
+The smoke test intentionally exercises the paths most likely to hide a bug. Confirm you see:
+
+| Log line | Confirms |
+| :--- | :--- |
+| `[MATCH][PARTIAL] ... matched` | id-join worked (partial is expected here) |
+| `[VERIFY] Label alignment OK` | each transcript is attached to its own audio row |
+| `decoder_start_token_id (<\|startoftranscript\|>) = 50258` | SOT strip uses the correct token |
+| `[GENERATION CONFIG] Pinned language='persian'` | eval decodes Persian, not auto-detected |
+| `[SMOKE TEST] Auto-scaled eval_steps=...` | eval/WER/CER/checkpoint actually run |
+| an `eval_wer` / `eval_cer` value + `checkpoint-*` dir | metrics and best-checkpoint saving work |
+
+> `--max_shards` is for smoke tests only. On a full run it prints a warning, and results from a
+> partial download must never be reported.
 
 ---
 
@@ -112,8 +137,15 @@ python train.py --max_steps 30 --output_dir ./whisper-large-v3-smoke-test
 To run complete fine-tuning on all training epochs:
 
 ```bash
-python train.py --max_steps -1 --epochs 3 --output_dir ./whisper-large-v3-neyshekar-qlora
+python train.py --max_steps -1 --epochs 3 --final_full_eval \
+    --output_dir ./whisper-large-v3-neyshekar-qlora
 ```
+
+> **Evaluation cost:** 3 epochs is ~6,267 optimizer steps. Every evaluation runs autoregressive
+> `generate()` over the validation split, so evaluating all 5,900 rows at `eval_steps=100` would add
+> roughly 4–8 hours of pure eval overhead. Defaults are therefore `eval_steps=500` with a
+> deterministic 1,500-row eval subset (~12 curve points for the Task 3 analysis), and
+> `--final_full_eval` computes the headline WER/CER once on the full split at the end.
 
 > **Note:** On the first run, the Neyshekar dataset will be downloaded from HuggingFace Hub (~3-5 GB). Subsequent runs will use the cached copy.
 
@@ -128,6 +160,11 @@ python train.py --max_steps -1 --epochs 3 --output_dir ./whisper-large-v3-neyshe
 | `--output_dir` | `./whisper-large-v3-neyshekar-qlora` | Directory to save checkpoints and final model weights |
 | `--train_csv` | `data/train.csv` | Path to training CSV dataset |
 | `--val_csv` | `data/val.csv` | Path to validation CSV dataset |
+| `--eval_steps` | auto | Evaluation frequency. Auto-scales down during smoke tests so the eval/WER/CER/checkpoint path is actually exercised |
+| `--save_steps` | auto | Checkpoint frequency (kept a multiple of `eval_steps`) |
+| `--max_eval_samples` | `1500` | Validation rows used for periodic evals. `-1` = always use the full split |
+| `--max_shards` | `None` (all 15) | Download only the first N parquet shards (~485 MB each). Smoke tests only |
+| `--final_full_eval` | off | After training, evaluate once on the **full** validation set and write `final_eval_metrics.json` |
 
 ---
 

@@ -76,12 +76,26 @@ class WhisperMetricsEvaluator:
         """
         Computes normalized WER and CER metrics from Seq2SeqTrainer predictions object.
         """
+        import numpy as np
+
         pred_ids = pred.predictions
         label_ids = pred.label_ids
 
-        # Replace -100 in label_ids with pad_token_id so tokenizer ignores padding tokens
+        # Seq2SeqTrainer may hand back a tuple (e.g. (sequences, scores)) rather than a bare array.
+        if isinstance(pred_ids, tuple):
+            pred_ids = pred_ids[0]
+
         pad_token_id = self.processor.tokenizer.pad_token_id
+
+        # Replace -100 with pad_token_id so the tokenizer can decode.
+        # Copy first: pred.label_ids is reused by the Trainer, and the original code mutated it
+        # in place, which corrupts the array if metrics are ever computed twice over it.
+        label_ids = np.asarray(label_ids).copy()
         label_ids[label_ids == -100] = pad_token_id
+
+        # Generated ids can also contain -100 padding when generation lengths differ across the batch.
+        pred_ids = np.asarray(pred_ids).copy()
+        pred_ids[pred_ids == -100] = pad_token_id
 
         # Decode token IDs to text strings
         pred_str_raw = self.processor.batch_decode(pred_ids, skip_special_tokens=True)
@@ -90,6 +104,22 @@ class WhisperMetricsEvaluator:
         # Apply Persian text normalization
         pred_str_norm = [normalize_persian_for_eval(s) for s in pred_str_raw]
         label_str_norm = [normalize_persian_for_eval(s) for s in label_str_raw]
+
+        # Drop pairs whose REFERENCE normalized to an empty string.
+        # jiwer raises ValueError("one or more references are empty strings") and would abort the
+        # whole training run at the first eval. An empty reference is also mathematically
+        # meaningless for WER (division by zero reference words).
+        filtered = [(p, l) for p, l in zip(pred_str_norm, label_str_norm) if l.strip()]
+        dropped = len(pred_str_norm) - len(filtered)
+        if dropped:
+            print(f"[METRICS][WARNING] Skipped {dropped} sample(s) with an empty reference transcript.")
+
+        if not filtered:
+            print("[METRICS][WARNING] All references were empty in this eval batch; returning WER/CER = 0.")
+            return {"wer": 0.0, "cer": 0.0}
+
+        pred_str_norm = [p for p, _ in filtered]
+        label_str_norm = [l for _, l in filtered]
 
         # Compute WER and CER as percentages
         wer_val = 100.0 * self.wer_metric.compute(predictions=pred_str_norm, references=label_str_norm)

@@ -42,7 +42,8 @@ def get_whisper_qlora_model(
     lora_r: int = config.LORA_R,
     lora_alpha: int = config.LORA_ALPHA,
     lora_dropout: float = config.LORA_DROPOUT,
-    target_modules: list = config.TARGET_MODULES
+    target_modules: list = config.TARGET_MODULES,
+    use_gradient_checkpointing: bool = config.GRADIENT_CHECKPOINTING
 ):
     """
     Loads Whisper Large-v3 in 4-bit NF4 quantization using BitsAndBytes,
@@ -71,10 +72,35 @@ def get_whisper_qlora_model(
     )
 
     # 3. Prepare Model for K-Bit Training & Adjust Config Flags
-    model = prepare_model_for_kbit_training(model)
+    #
+    # CRITICAL: prepare_model_for_kbit_training() defaults to use_gradient_checkpointing=True and
+    # enables checkpointing on the model itself. Setting gradient_checkpointing=False only in
+    # Seq2SeqTrainingArguments is therefore NOT enough -- checkpointing would stay on and the
+    # expected ~1.3-1.5x speedup would silently fail to materialise. It has to be disabled in
+    # BOTH places, which is why the flag is threaded through here.
+    model = prepare_model_for_kbit_training(
+        model, use_gradient_checkpointing=use_gradient_checkpointing
+    )
+    print(f"[GRADIENT CHECKPOINTING] {'ENABLED (saves VRAM, ~1.3-1.5x slower)' if use_gradient_checkpointing else 'DISABLED (faster, needs more VRAM)'}")
     model.config.use_cache = False  # Mandatory for Gradient Checkpointing compatibility
     model.config.forced_decoder_ids = None  # Mandatory for Persian generation
     model.config.suppress_tokens = []  # Clear default token suppression
+
+    # Pin the generation language/task on the GENERATION config.
+    #
+    # During evaluation the Trainer runs predict_with_generate=True. If the language is not pinned,
+    # whisper-large-v3 performs automatic language detection per utterance and will happily decode
+    # some Persian clips as Arabic/Urdu (visually similar script) or emit translated English.
+    # That inflates WER/CER for reasons unrelated to the fine-tuning itself, which would make the
+    # Task 3 training-curve analysis and the Task 4 error analysis misleading.
+    # Note these must be set on model.generation_config -- setting model.config alone is ignored
+    # by generate() in current transformers versions.
+    if getattr(model, "generation_config", None) is not None:
+        model.generation_config.language = config.LANGUAGE
+        model.generation_config.task = config.TASK
+        model.generation_config.forced_decoder_ids = None
+        print(f"[GENERATION CONFIG] Pinned language='{config.LANGUAGE}', task='{config.TASK}' "
+              f"for deterministic Persian decoding during eval.")
 
     # 4. Register forward hook on encoder conv1 for QLoRA Gradient Checkpointing stability
     model.get_encoder().conv1.register_forward_hook(make_inputs_require_grad)

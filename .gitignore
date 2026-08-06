@@ -24,3 +24,11 @@ runs/
 # OS Junk
 .DS_Store
 Thumbs.db
+
+# Tooling scratch dirs
+.claude/
+
+# Smoke tests & efficiency ablations
+smoke-test*/
+smoke-l4*/
+ablation-*/

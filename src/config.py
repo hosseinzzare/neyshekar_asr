@@ -59,10 +59,26 @@ class Config:
     PER_DEVICE_EVAL_BATCH_SIZE = 8
     GRADIENT_ACCUMULATION_STEPS = 2  # Effective Batch Size = 16
     FP16 = True
+    # Gradient checkpointing recomputes activations during the backward pass instead of storing
+    # them: much lower VRAM, but ~1.3-1.5x slower. Required on a 16 GB T4; on a 24 GB L4 it can
+    # be disabled with --no_gradient_checkpointing for a free speedup (gradients are identical).
     GRADIENT_CHECKPOINTING = True
+    DATALOADER_NUM_WORKERS = 2
     EVAL_STRATEGY = "steps"
-    EVAL_STEPS = 100
-    SAVE_STEPS = 100
+    # With ~2,089 steps/epoch (33,432 train rows / effective batch 16), 3 epochs is ~6,267 steps.
+    # EVAL_STEPS=100 would mean 62 evaluations; each one runs autoregressive generate() over the
+    # full 5,900-row validation set, which costs roughly 4-8 HOURS of pure evaluation overhead on
+    # top of training. 500 gives ~12 evaluation points -- still plenty of resolution for the
+    # Task 3 loss/WER/CER curves, at a fraction of the cost.
+    EVAL_STEPS = 500
+    SAVE_STEPS = 500
+
+    # Cap how many validation rows are used for the PERIODIC in-training evaluations.
+    # A fixed 1,500-row subset (deterministically sampled with SEED) keeps every eval point
+    # comparable while cutting generate() cost ~4x. Set to None to always use the full split.
+    # NOTE: the final reported metrics should be computed on the FULL validation set -- see
+    # the --final_full_eval flag in train.py, which does exactly that once at the end.
+    MAX_EVAL_SAMPLES = 1500
     SAVE_TOTAL_LIMIT = 2
     METRIC_FOR_BEST_MODEL = "wer"
     GREATER_IS_BETTER = False
@@ -124,6 +140,8 @@ GRADIENT_CHECKPOINTING = Config.GRADIENT_CHECKPOINTING
 EVAL_STRATEGY = Config.EVAL_STRATEGY
 EVAL_STEPS = Config.EVAL_STEPS
 SAVE_STEPS = Config.SAVE_STEPS
+MAX_EVAL_SAMPLES = Config.MAX_EVAL_SAMPLES
+DATALOADER_NUM_WORKERS = Config.DATALOADER_NUM_WORKERS
 SAVE_TOTAL_LIMIT = Config.SAVE_TOTAL_LIMIT
 METRIC_FOR_BEST_MODEL = Config.METRIC_FOR_BEST_MODEL
 GREATER_IS_BETTER = Config.GREATER_IS_BETTER
