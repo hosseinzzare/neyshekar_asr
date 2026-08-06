@@ -37,12 +37,41 @@ class Config:
     SAMPLING_RATE = 16000
 
     # -------------------------------------------------------------
+    # 3b. Audio Preprocessing (the Task 1 investigation called for these)
+    # -------------------------------------------------------------
+    # Task 1 found 27.9% of clips with a suspiciously low character-per-second rate (long
+    # silences) and 22.1% touching the digital ceiling (clipping). Whisper's autoregressive
+    # decoder is known to hallucinate text over silence, so leading/trailing silence is trimmed
+    # before feature extraction. Only the EDGES are trimmed -- pauses inside an utterance are
+    # natural speech and are deliberately preserved.
+    ENABLE_VAD_TRIM = True
+    VAD_TOP_DB = 40.0          # frames quieter than peak-40dB count as silence
+    VAD_MARGIN_MS = 100.0      # keep 100 ms either side so word onsets are never clipped
+    VAD_MIN_DURATION_S = 1.0   # if trimming would leave less than this, keep the original
+
+    # Peak-normalise every clip to a common level. Cannot repair already-clipped audio (that
+    # information is gone), but it gives the dataset a consistent dynamic range across speakers.
+    ENABLE_PEAK_NORM = True
+    PEAK_NORM_DB = -3.0
+
+    # -------------------------------------------------------------
     # 4. QLoRA Optimization (4-bit Quantization + PEFT)
     # -------------------------------------------------------------
+    # 4-bit quantization exists to fit large models on SMALL GPUs. It is not free: bitsandbytes
+    # must dequantize every weight back to 16-bit on each forward pass, which costs compute.
+    # On a 24 GB L4 the full bf16 model (~3.1 GB) fits comfortably, so quantization buys ~2.2 GB
+    # of memory we do not need in exchange for per-step overhead -- and LoRA then trains on
+    # APPROXIMATED weights rather than exact ones. Use --no_quantization to disable it.
+    USE_QUANTIZATION = True
     LOAD_IN_4BIT = True
     BNB_4BIT_QUANT_TYPE = "nf4"
     BNB_4BIT_COMPUTE_DTYPE = "float16"
     BNB_4BIT_USE_DOUBLE_QUANT = True
+
+    # Compute dtype used when quantization is OFF. bf16 has the same exponent range as fp32, so
+    # it needs no loss scaling and is more numerically stable than fp16; Ada (L4) supports it
+    # natively at full speed.
+    USE_BF16_WHEN_UNQUANTIZED = True
     
     LORA_R = 32
     LORA_ALPHA = 64
@@ -119,6 +148,14 @@ LANGUAGE = Config.LANGUAGE
 TASK = Config.TASK
 SAMPLING_RATE = Config.SAMPLING_RATE
 
+USE_QUANTIZATION = Config.USE_QUANTIZATION
+USE_BF16_WHEN_UNQUANTIZED = Config.USE_BF16_WHEN_UNQUANTIZED
+ENABLE_VAD_TRIM = Config.ENABLE_VAD_TRIM
+VAD_TOP_DB = Config.VAD_TOP_DB
+VAD_MARGIN_MS = Config.VAD_MARGIN_MS
+VAD_MIN_DURATION_S = Config.VAD_MIN_DURATION_S
+ENABLE_PEAK_NORM = Config.ENABLE_PEAK_NORM
+PEAK_NORM_DB = Config.PEAK_NORM_DB
 LOAD_IN_4BIT = Config.LOAD_IN_4BIT
 BNB_4BIT_QUANT_TYPE = Config.BNB_4BIT_QUANT_TYPE
 BNB_4BIT_COMPUTE_DTYPE = Config.BNB_4BIT_COMPUTE_DTYPE

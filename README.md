@@ -12,6 +12,9 @@ A production-ready, highly optimized end-to-end pipeline for Persian speech data
    - **Speech Rate Filtering:** Filters out samples outside reasonable speech rates (1.5 to 22 characters per second).
    - **Persian Text Normalization:** Arabic-to-Persian character conversion, digits-to-words transformation (`num2fawords`), punctuation stripping, and whitespace normalization.
    - **Balanced Data Splitting:** Stratified split into **85% Training** (`data/train.csv`) and **15% Validation** (`data/val.csv`).
+   - **Silence Trimming (VAD):** Energy-based removal of leading/trailing silence before feature extraction, addressing the 27.9% of clips with a low character-per-second rate. Whisper's decoder is known to hallucinate text over silence. Pauses *inside* an utterance are deliberately preserved as natural speech rhythm.
+   - **Peak Normalisation:** Every clip scaled to −3 dBFS, giving a consistent dynamic range across the 22.1% of clips that touch the digital ceiling. This is a pure scalar multiply, so no distortion is introduced and the output can never clip.
+   - *Note:* neither step reduces training time — Whisper pads every clip to 30 s regardless. They are quality measures, not speed measures.
 
 2. **QLoRA Fine-Tuning Architecture (Task 2):**
    - **4-Bit NF4 Quantization:** Loads base model `openai/whisper-large-v3` with `bitsandbytes` 4-bit quantization for minimal VRAM footprint (~10–12 GB VRAM required).
@@ -164,6 +167,11 @@ python train.py --max_steps -1 --epochs 3 --final_full_eval \
 | `--save_steps` | auto | Checkpoint frequency (kept a multiple of `eval_steps`) |
 | `--max_eval_samples` | `1500` | Validation rows used for periodic evals. `-1` = always use the full split |
 | `--max_shards` | `None` (all 15) | Download only the first N parquet shards (~485 MB each). Smoke tests only |
+| `--no_quantization` | off | Load the base model in bf16 instead of 4-bit NF4. Removes dequantization overhead and lets LoRA adapt exact weights. Needs ~2.2 GB more VRAM |
+| `--no_gradient_checkpointing` | off | Faster but much higher VRAM. **Measured to OOM on a 24 GB L4** |
+| `--train_batch_size` / `--grad_accum` | `8` / `2` | Keep the product at 16 to preserve the learning-rate recipe |
+| `--eval_batch_size` | `8` | Affects evaluation speed only, never WER/CER |
+| `--no_vad_trim` / `--no_peak_norm` | off | Disable the Task 1 audio preprocessing |
 | `--final_full_eval` | off | After training, evaluate once on the **full** validation set and write `final_eval_metrics.json` |
 
 ---

@@ -46,6 +46,77 @@ except ImportError:
     Audio = None
 
 
+def trim_silence(
+    audio: np.ndarray,
+    sr: int = 16000,
+    top_db: float = config.VAD_TOP_DB,
+    margin_ms: float = config.VAD_MARGIN_MS,
+    min_duration_s: float = config.VAD_MIN_DURATION_S,
+) -> np.ndarray:
+    """
+    Remove leading and trailing silence using short-time energy.
+
+    WHY: Whisper's autoregressive decoder is prone to inventing text over silence (the
+    "hallucination on silence" failure mode). Task 1 found 27.9% of clips with a very low
+    character-per-second rate, i.e. a short transcript stretched over a long recording --
+    exactly the profile that triggers it.
+
+    Only the EDGES are trimmed. Pauses inside an utterance are natural speech rhythm and
+    removing them would teach the model an unnatural cadence, so they are left intact.
+
+    Safety: if the audio is entirely silent, or trimming would leave less than
+    min_duration_s, the ORIGINAL signal is returned. This function never returns an
+    empty array and never returns more samples than it was given.
+    """
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.size == 0:
+        return audio
+    frame = max(1, int(sr * 0.02))                      # 20 ms analysis frames
+    n_frames = audio.size // frame
+    if n_frames < 2:
+        return audio
+
+    frames = audio[: n_frames * frame].reshape(n_frames, frame)
+    rms = np.sqrt((frames.astype(np.float64) ** 2).mean(axis=1) + 1e-12)
+    peak = rms.max()
+    if peak <= 0:
+        return audio
+
+    voiced = np.nonzero(rms > peak * (10.0 ** (-top_db / 20.0)))[0]
+    if voiced.size == 0:
+        return audio
+
+    margin = int(sr * margin_ms / 1000.0)
+    start = max(0, voiced[0] * frame - margin)
+    end = min(audio.size, (voiced[-1] + 1) * frame + margin)
+    trimmed = audio[start:end]
+
+    if trimmed.size < int(sr * min_duration_s):
+        return audio
+    return trimmed
+
+
+def peak_normalize(audio: np.ndarray, target_db: float = config.PEAK_NORM_DB) -> np.ndarray:
+    """
+    Scale the waveform so its loudest sample sits at target_db (default -3 dBFS).
+
+    WHY: Task 1 found 22.1% of clips touching the digital ceiling. Normalisation cannot
+    recover information destroyed by clipping, but it does give the corpus a consistent
+    dynamic range across speakers -- some recorded loud, some quiet -- which stabilises the
+    log-Mel feature distribution the model sees.
+
+    This is a pure scalar multiply: the waveform shape is untouched, so no distortion is
+    introduced. Because the target is below full scale, the output can never clip.
+    """
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.size == 0:
+        return audio
+    peak = float(np.max(np.abs(audio)))
+    if peak <= 1e-8:                                     # digital silence: leave it alone
+        return audio
+    return (audio * ((10.0 ** (target_db / 20.0)) / peak)).astype(np.float32)
+
+
 @dataclass
 class DataCollatorSpeechSeq2SeqWithPadding:
     """
@@ -91,7 +162,12 @@ class DataCollatorSpeechSeq2SeqWithPadding:
         }
 
 
-def prepare_dataset(batch: Dict[str, Any], processor: Any) -> Dict[str, Any]:
+def prepare_dataset(
+    batch: Dict[str, Any],
+    processor: Any,
+    enable_vad_trim: bool = config.ENABLE_VAD_TRIM,
+    enable_peak_norm: bool = config.ENABLE_PEAK_NORM,
+) -> Dict[str, Any]:
     """
     Preprocesses a single sample for Whisper model:
     - Reads audio signal (at 16 kHz sampling rate) from HF audio dict, bytes, or file path.
@@ -215,14 +291,24 @@ def prepare_dataset(batch: Dict[str, Any], processor: Any) -> Dict[str, Any]:
                 audio_array,
             ).astype(np.float32)
 
-    # 6. Extract 128-channel Log-Mel Spectrogram Features
+    # 6. Audio preprocessing called for by the Task 1 investigation.
+    #    Order matters: trim first, THEN normalise, so the peak is measured on actual speech
+    #    rather than on a stray click inside the silence we were about to discard.
+    #    NOTE: neither step changes training time -- Whisper pads every clip to 30 s regardless.
+    #    These are quality measures (hallucination-on-silence, clipping), not speed measures.
+    if enable_vad_trim:
+        audio_array = trim_silence(audio_array, sr=16000)
+    if enable_peak_norm:
+        audio_array = peak_normalize(audio_array)
+
+    # 7. Extract 128-channel Log-Mel Spectrogram Features
     inputs = processor.feature_extractor(
         audio_array,
         sampling_rate=16000,
         return_tensors="np"
     )
 
-    # 7. Tokenize text transcript to Token IDs.
+    # 8. Tokenize text transcript to Token IDs.
     # Truncate to Whisper's decoder limit (max_target_positions = 448). Whisper has learned
     # absolute positional embeddings for only 448 decoder positions, so a longer label triggers
     # an index-out-of-range CUDA assert mid-training rather than a clean error.
@@ -444,7 +530,9 @@ def get_datasets_and_collator(
     task: str = config.TASK,
     max_samples: Optional[int] = None,
     num_proc: Optional[int] = 1,
-    max_shards: Optional[int] = None
+    max_shards: Optional[int] = None,
+    enable_vad_trim: bool = config.ENABLE_VAD_TRIM,
+    enable_peak_norm: bool = config.ENABLE_PEAK_NORM
 ) -> tuple[Any, Any, Any, Any]:
     """
     Main entry point function returning (train_dataset, val_dataset, processor, data_collator).
@@ -485,11 +573,20 @@ def get_datasets_and_collator(
             "WER/CER and best-checkpoint selection can actually run."
         )
 
+    print(f"[AUDIO PREP] VAD silence trim: {'ON' if enable_vad_trim else 'OFF'} "
+          f"(top_db={config.VAD_TOP_DB}, margin={config.VAD_MARGIN_MS}ms, "
+          f"min_duration={config.VAD_MIN_DURATION_S}s) | "
+          f"peak normalisation: {'ON (' + str(config.PEAK_NORM_DB) + ' dBFS)' if enable_peak_norm else 'OFF'}")
+
     # Prepare .map() kwargs with writer_batch_size to prevent OOM
     # writer_batch_size flushes the Arrow cache buffer to disk every N samples,
     # preventing unbounded RAM growth during spectrogram extraction.
     map_kwargs = {
-        "fn_kwargs": {"processor": processor},
+        "fn_kwargs": {
+            "processor": processor,
+            "enable_vad_trim": enable_vad_trim,
+            "enable_peak_norm": enable_peak_norm,
+        },
         "remove_columns": dataset_dict["train"].column_names,
         "desc": "Preparing Features",
         "writer_batch_size": config.MAP_WRITER_BATCH_SIZE,
@@ -502,7 +599,11 @@ def get_datasets_and_collator(
 
     print(f"[DATASET MAP] Processing val_dataset with prepare_dataset (num_proc={num_proc or 1}, writer_batch_size={config.MAP_WRITER_BATCH_SIZE})...")
     val_map_kwargs = {
-        "fn_kwargs": {"processor": processor},
+        "fn_kwargs": {
+            "processor": processor,
+            "enable_vad_trim": enable_vad_trim,
+            "enable_peak_norm": enable_peak_norm,
+        },
         "remove_columns": dataset_dict["validation"].column_names,
         "desc": "Preparing Features",
         "writer_batch_size": config.MAP_WRITER_BATCH_SIZE,

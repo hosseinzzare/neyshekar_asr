@@ -137,6 +137,25 @@ def parse_args():
         help="Worker processes for the dataloader (0 = load in the main process)."
     )
     parser.add_argument(
+        "--no_quantization",
+        action="store_true",
+        help=(
+            "Load the base model in bf16 instead of 4-bit NF4. Removes the per-step "
+            "dequantization overhead and lets LoRA adapt EXACT rather than approximated "
+            "weights. Needs ~2.2 GB more VRAM; safe on a 24 GB L4."
+        )
+    )
+    parser.add_argument(
+        "--no_vad_trim",
+        action="store_true",
+        help="Disable trimming of leading/trailing silence before feature extraction."
+    )
+    parser.add_argument(
+        "--no_peak_norm",
+        action="store_true",
+        help="Disable peak normalisation of the waveform before feature extraction."
+    )
+    parser.add_argument(
         "--final_full_eval",
         action="store_true",
         help=(
@@ -180,7 +199,9 @@ def run_training_pipeline(args=None):
         train_csv=args.train_csv,
         val_csv=args.val_csv,
         max_samples=max_samples,
-        max_shards=args.max_shards
+        max_shards=args.max_shards,
+        enable_vad_trim=config.ENABLE_VAD_TRIM and not args.no_vad_trim,
+        enable_peak_norm=config.ENABLE_PEAK_NORM and not args.no_peak_norm
     )
 
     # Guard against accidentally producing "final" numbers from a partial download.
@@ -242,8 +263,24 @@ def run_training_pipeline(args=None):
               f"tuned for the original value and should be rescaled. Results are not directly "
               f"comparable to the baseline configuration.")
 
-    # 3. Load QLoRA Quantized Model
-    model = get_whisper_qlora_model(use_gradient_checkpointing=use_gradient_checkpointing)
+    # 2e. Precision must agree between the model weights and the Trainer's autocast setting.
+    #     With quantization off we load bf16 weights, so the Trainer must use bf16 too --
+    #     leaving fp16=True there would mix precisions and can silently destabilise training.
+    #     transformers also rejects fp16 and bf16 being enabled at the same time.
+    use_quantization = config.USE_QUANTIZATION and not args.no_quantization
+    if use_quantization:
+        use_fp16, use_bf16 = config.FP16, False
+    else:
+        want_bf16 = config.USE_BF16_WHEN_UNQUANTIZED and torch.cuda.is_bf16_supported()
+        use_fp16, use_bf16 = (False, True) if want_bf16 else (True, False)
+    print(f"[PRECISION] quantization={'4-bit NF4' if use_quantization else 'OFF'} | "
+          f"fp16={use_fp16} | bf16={use_bf16}")
+
+    # 3. Load Model (quantized 4-bit, or full-precision bf16)
+    model = get_whisper_qlora_model(
+        use_gradient_checkpointing=use_gradient_checkpointing,
+        use_quantization=use_quantization
+    )
 
     # 4. Prepare Compute Metrics Function
     compute_metrics_fn = get_compute_metrics_fn(processor=processor)
@@ -259,7 +296,8 @@ def run_training_pipeline(args=None):
         warmup_steps=config.WARMUP_STEPS,
         num_train_epochs=args.epochs,
         max_steps=args.max_steps,
-        fp16=config.FP16,
+        fp16=use_fp16,
+        bf16=use_bf16,
         gradient_checkpointing=use_gradient_checkpointing,
         predict_with_generate=True,
         generation_max_length=225,

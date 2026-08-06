@@ -99,10 +99,29 @@ if ds:
     check("labels truncated to Whisper's 448 limit", must_contain(ds, "max_length=448"))
     check("partial-shard download supported", must_contain(ds, "verification_mode"))
 
+    # Task 1 called for silence trimming and peak normalisation; they must run BEFORE the
+    # log-Mel features are extracted, and trimming must run before normalisation so the peak
+    # is measured on speech rather than on noise in the silence being discarded.
+    check("silence trimming implemented", must_contain(ds, "def trim_silence("))
+    check("peak normalisation implemented", must_contain(ds, "def peak_normalize("))
+    if ds and "def trim_silence(" in ds and "inputs = processor.feature_extractor(" in ds:
+        i_trim = ds.find("audio_array = trim_silence(")
+        i_norm = ds.find("audio_array = peak_normalize(")
+        i_feat = ds.find("inputs = processor.feature_extractor(")
+        check("preprocessing order: trim -> normalise -> features",
+              0 < i_trim < i_norm < i_feat,
+              "wrong order would measure the peak on silence, or skip preprocessing entirely")
+
 md = read("src/model.py")
 check("generation language pinned to Persian",
       must_contain(md, "generation_config.language"),
       "large-v3 would auto-detect and decode some clips as Arabic/Urdu")
+# prepare_model_for_kbit_training() is k-bit specific and force-enables gradient checkpointing.
+check("quantization can be disabled", must_contain(md, "if use_quantization:"))
+check("kbit prep only used for quantized models",
+      must_contain(md, "model.gradient_checkpointing_enable()"),
+      "unquantized path must enable checkpointing itself")
+check("bf16 hardware support is checked", must_contain(md, "is_bf16_supported()"))
 
 mt = read("src/metrics.py")
 check("empty-reference guard in metrics (jiwer crash)",
@@ -111,8 +130,15 @@ check("metrics do not mutate label_ids in place",
       must_contain(mt, "np.asarray(label_ids).copy()"))
 
 tr = read("src/train.py")
-for flag in ("--max_shards", "--max_eval_samples", "--final_full_eval", "--eval_steps"):
+for flag in ("--max_shards", "--max_eval_samples", "--final_full_eval", "--eval_steps",
+             "--no_quantization", "--no_vad_trim", "--no_peak_norm"):
     check(f"train.py exposes {flag}", must_contain(tr, f'"{flag}"'))
+
+# transformers raises if fp16 and bf16 are both enabled, and mixing bf16 weights with an
+# fp16 autocast context can silently destabilise training.
+check("fp16/bf16 chosen consistently with quantization",
+      must_contain(tr, "fp16=use_fp16,") and must_contain(tr, "bf16=use_bf16,"),
+      "precision flags must follow the quantization mode")
 
 # `python train.py` puts the repo ROOT first on sys.path, so `import config` inside src/
 # resolves to the ROOT launcher -- any name missing from its re-export list is an

@@ -43,7 +43,8 @@ def get_whisper_qlora_model(
     lora_alpha: int = config.LORA_ALPHA,
     lora_dropout: float = config.LORA_DROPOUT,
     target_modules: list = config.TARGET_MODULES,
-    use_gradient_checkpointing: bool = config.GRADIENT_CHECKPOINTING
+    use_gradient_checkpointing: bool = config.GRADIENT_CHECKPOINTING,
+    use_quantization: bool = config.USE_QUANTIZATION
 ):
     """
     Loads Whisper Large-v3 in 4-bit NF4 quantization using BitsAndBytes,
@@ -56,31 +57,56 @@ def get_whisper_qlora_model(
     config.set_seed(config.SEED)
     print(f"\n[MODEL LOAD] Loading base model '{model_name_or_path}' with 4-bit QLoRA...")
 
-    # 1. Define 4-bit Quantization Config (BitsAndBytes)
-    quantization_config = BitsAndBytesConfig(
-        load_in_4bit=load_in_4bit,
-        bnb_4bit_quant_type=config.BNB_4BIT_QUANT_TYPE,
-        bnb_4bit_compute_dtype=torch.float16,
-        bnb_4bit_use_double_quant=config.BNB_4BIT_USE_DOUBLE_QUANT
-    )
+    # 1-2. Load the base model, quantized or not.
+    #
+    # 4-bit quantization is a memory/compute trade: it shrinks the weights ~3.5x but forces
+    # bitsandbytes to dequantize them back to 16-bit on every forward pass. That is worth it on
+    # a small GPU and pointless on one with headroom -- and LoRA then adapts APPROXIMATED weights
+    # instead of exact ones. With quantization off we load in bf16: same exponent range as fp32
+    # (so no loss scaling needed) and full-speed on Ada-class hardware such as the L4.
+    if use_quantization:
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=load_in_4bit,
+            bnb_4bit_quant_type=config.BNB_4BIT_QUANT_TYPE,
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_use_double_quant=config.BNB_4BIT_USE_DOUBLE_QUANT
+        )
+        model = WhisperForConditionalGeneration.from_pretrained(
+            model_name_or_path,
+            quantization_config=quantization_config,
+            device_map="auto"
+        )
+        print("[QUANTIZATION] 4-bit NF4 ENABLED (~0.9 GB weights, dequantization overhead per step)")
+    else:
+        dtype = torch.bfloat16 if config.USE_BF16_WHEN_UNQUANTIZED else torch.float16
+        if dtype is torch.bfloat16 and not torch.cuda.is_bf16_supported():
+            print("[QUANTIZATION][WARNING] bf16 unsupported on this GPU; falling back to fp16.")
+            dtype = torch.float16
+        model = WhisperForConditionalGeneration.from_pretrained(
+            model_name_or_path,
+            dtype=dtype,
+            device_map="auto"
+        )
+        print(f"[QUANTIZATION] DISABLED -- full {str(dtype).split('.')[-1]} weights (~3.1 GB), "
+              f"no dequantization overhead, LoRA adapts EXACT weights")
 
-    # 2. Load Base Whisper Model in 4-bit
-    model = WhisperForConditionalGeneration.from_pretrained(
-        model_name_or_path,
-        quantization_config=quantization_config,
-        device_map="auto"
-    )
-
-    # 3. Prepare Model for K-Bit Training & Adjust Config Flags
+    # 3. Prepare Model for Training & Adjust Config Flags
     #
     # CRITICAL: prepare_model_for_kbit_training() defaults to use_gradient_checkpointing=True and
     # enables checkpointing on the model itself. Setting gradient_checkpointing=False only in
     # Seq2SeqTrainingArguments is therefore NOT enough -- checkpointing would stay on and the
     # expected ~1.3-1.5x speedup would silently fail to materialise. It has to be disabled in
     # BOTH places, which is why the flag is threaded through here.
-    model = prepare_model_for_kbit_training(
-        model, use_gradient_checkpointing=use_gradient_checkpointing
-    )
+    #
+    # That helper is specific to k-bit models (it also upcasts layernorms to fp32). For an
+    # unquantized model we enable checkpointing directly instead of calling it.
+    if use_quantization:
+        model = prepare_model_for_kbit_training(
+            model, use_gradient_checkpointing=use_gradient_checkpointing
+        )
+    else:
+        if use_gradient_checkpointing:
+            model.gradient_checkpointing_enable()
     print(f"[GRADIENT CHECKPOINTING] {'ENABLED (saves VRAM, ~1.3-1.5x slower)' if use_gradient_checkpointing else 'DISABLED (faster, needs more VRAM)'}")
     model.config.use_cache = False  # Mandatory for Gradient Checkpointing compatibility
     model.config.forced_decoder_ids = None  # Mandatory for Persian generation
