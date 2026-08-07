@@ -59,6 +59,43 @@ def must_not_contain(src, needle):
     return src is not None and needle not in src
 
 
+def strip_comments(src: str) -> str:
+    """
+    Blank out comments and string literals so prose is never mistaken for code.
+
+    Two traps this avoids, both hit for real while building these checks:
+      - a naive quote-counting heuristic misreads apostrophes in ordinary English
+        ("whisper-large-v3's config.json declares...") and leaves the comment in, so the
+        comment then looks like a reference to a `config.json` attribute;
+      - simply re-joining tokens with spaces turns `config.SEED` into `config . SEED`, so the
+        scan matches nothing and every check built on it passes VACUOUSLY.
+    Blanking the spans in place keeps every other character exactly where it was.
+    """
+    import io
+    import tokenize
+
+    lines = src.splitlines(keepends=True)
+    try:
+        spans = [
+            (t.start, t.end)
+            for t in tokenize.generate_tokens(io.StringIO(src).readline)
+            if t.type in (tokenize.COMMENT, tokenize.STRING)
+        ]
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return src   # unparseable: fall back to raw text rather than skipping the check
+
+    for (r0, c0), (r1, c1) in reversed(spans):
+        if r0 == r1:
+            line = lines[r0 - 1]
+            lines[r0 - 1] = line[:c0] + " " * (c1 - c0) + line[c1:]
+        else:
+            lines[r0 - 1] = lines[r0 - 1][:c0] + "\n"
+            for r in range(r0, r1 - 1):
+                lines[r] = "\n"
+            lines[r1 - 1] = " " * c1 + lines[r1 - 1][c1:]
+    return "".join(lines)
+
+
 # ----------------------------------------------------------------------------------
 print("\n" + "=" * 74)
 print(" 1. CODE -- each check guards a bug that previously failed SILENTLY")
@@ -128,13 +165,23 @@ check("bf16 detected via compute capability, not is_bf16_supported()",
       must_contain(tr_precision, "get_device_capability()"))
 # Loading 16-bit weights makes the Trainer skip its autocast wrapper, so fp32 input_features
 # then hit half-precision conv1 -> "Input type (float) and bias type (c10::Half)".
-if md and "else:" in md:
-    _s = md.find("    else:\n        # Load in fp32")
-    _e = md.find("# 3. Prepare Model for Training")
-    unquant_branch = md[_s:_e] if 0 <= _s < _e else ""
-    check("unquantized path loads fp32 weights (autocast handles precision)",
-          bool(unquant_branch) and "dtype=" not in unquant_branch,
-          "16-bit weights + fp32 inputs raise a dtype mismatch in conv1")
+if md:
+    # Scan CODE ONLY. Checking the raw file would match the explanatory comment that also
+    # contains the literal "dtype=torch.float32", so deleting the real argument would still
+    # look fine -- the same prose-vs-code trap that the config.json comment already sprang.
+    md_code = strip_comments(md)
+    # whisper-large-v3's config declares float16, which modern transformers honours when no
+    # dtype is passed -- so fp32 has to be requested EXPLICITLY.
+    check("unquantized path requests fp32 explicitly (code, not comment)",
+          "dtype=torch.float32" in md_code,
+          "checkpoint declares float16; omitting dtype silently loads 16-bit weights")
+    check("loaded dtype is asserted after loading",
+          "Expected fp32 base weights but got" in md,
+          "a silent 16-bit load must fail loudly, not at the first conv1d")
+
+check("refuses to run without a GPU",
+      must_contain(tr_precision, "No CUDA GPU is visible to PyTorch"),
+      "CPU training would take days while looking healthy")
 
 mt = read("src/metrics.py")
 check("empty-reference guard in metrics (jiwer crash)",
@@ -166,7 +213,8 @@ check("MAX_EVAL_SAMPLES re-exported by root config.py", must_contain(root_cfg, "
 if root_cfg and src_cfg:
     used = set()
     for rel in ("src/dataset.py", "src/model.py", "src/metrics.py", "src/train.py"):
-        s = read(rel) or ""
+        s = strip_comments(read(rel) or "")
+        # `config.X` as a bare module reference -- not `model.config.X`, not `self.config.X`
         used |= set(re.findall(r"(?<![.\w])config\.([A-Za-z_]\w*)", s))
     exported = set(re.findall(r"^\s{4}([A-Z_]\w*),?\s*$", root_cfg, re.M))
     exported |= set(re.findall(r"^\s{4}(set_seed|Config),?\s*$", root_cfg, re.M))

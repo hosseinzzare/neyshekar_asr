@@ -179,6 +179,25 @@ def run_training_pipeline(args=None):
     if args is None:
         args = parse_args()
 
+    # 0. Refuse to start without a GPU.
+    #
+    # Fine-tuning whisper-large-v3 on CPU is not merely slow, it is days per epoch -- but
+    # nothing in the stack errors out, so the run would look healthy while wasting the session.
+    # A missing GPU also silently downgrades precision selection and disables pinned memory
+    # ("no accelerator is found"), so catching it here explains all three symptoms at once.
+    if torch is not None:
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "No CUDA GPU is visible to PyTorch -- refusing to start.\n"
+                "  Training whisper-large-v3 on CPU would take days and silently burn the session.\n"
+                "  On Lightning.ai: confirm the Studio is running on a GPU machine (not CPU), then\n"
+                "  check with:  nvidia-smi   and   python -c \"import torch; print(torch.cuda.is_available())\""
+            )
+        _name = torch.cuda.get_device_name(0)
+        _major, _minor = torch.cuda.get_device_capability()
+        _total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        print(f"[GPU] {_name} | compute capability {_major}.{_minor} | {_total:.1f} GiB")
+
     # 1. Initialize Deterministic Random Seed
     set_seed(config.SEED)
 
@@ -263,25 +282,24 @@ def run_training_pipeline(args=None):
               f"tuned for the original value and should be rescaled. Results are not directly "
               f"comparable to the baseline configuration.")
 
-    # 2e. Precision must agree between the model weights and the Trainer's autocast setting.
-    #     With quantization off we load bf16 weights, so the Trainer must use bf16 too --
-    #     leaving fp16=True there would mix precisions and can silently destabilise training.
-    #     transformers also rejects fp16 and bf16 being enabled at the same time.
+    # 2e. Pick the autocast precision. transformers rejects fp16 and bf16 being set together,
+    #     so exactly one of them is enabled here.
+    #
+    #     Quantized path keeps fp16 to match bnb_4bit_compute_dtype. Unquantized path prefers
+    #     bf16: same exponent range as fp32 (no loss scaling) and full tensor-core speed on
+    #     Ampere and newer. Capability is read directly rather than via
+    #     torch.cuda.is_bf16_supported(), which can report False before CUDA is initialised and
+    #     previously downgraded an Ada-class L4 (SM 8.9) to fp16 without explanation.
     use_quantization = config.USE_QUANTIZATION and not args.no_quantization
     if use_quantization:
         use_fp16, use_bf16 = config.FP16, False
     else:
-        # Detect bf16 via compute capability rather than torch.cuda.is_bf16_supported():
-        # that helper can report False when CUDA has not been initialised yet, which silently
-        # downgraded an Ada-class L4 (SM 8.9) to fp16. bf16 needs SM 8.0+ (Ampere and newer).
-        bf16_capable = False
-        if torch.cuda.is_available():
-            major, minor = torch.cuda.get_device_capability()
-            bf16_capable = major >= 8
-            print(f"[PRECISION] GPU {torch.cuda.get_device_name(0)} "
-                  f"(compute capability {major}.{minor}) -> bf16 {'supported' if bf16_capable else 'NOT supported'}")
+        major, _minor = torch.cuda.get_device_capability()      # GPU guaranteed present by step 0
+        bf16_capable = major >= 8                               # bf16 needs SM 8.0+
         want_bf16 = config.USE_BF16_WHEN_UNQUANTIZED and bf16_capable
         use_fp16, use_bf16 = (False, True) if want_bf16 else (True, False)
+        print(f"[PRECISION] bf16 {'supported' if bf16_capable else 'NOT supported'} "
+              f"(SM {major}.{_minor}, needs 8.0+)")
     print(f"[PRECISION] quantization={'4-bit NF4' if use_quantization else 'OFF'} | "
           f"fp16={use_fp16} | bf16={use_bf16}")
 
@@ -343,7 +361,17 @@ def run_training_pipeline(args=None):
 
     # 7. Execute Training
     print("[TRAINING] Starting training execution...")
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
     train_result = trainer.train()
+
+    # Report peak VRAM. This is what decides whether a configuration is viable at all --
+    # gradient checkpointing and quantization are both memory/speed trades, so the peak figure
+    # is the other half of every timing number below.
+    if torch is not None and torch.cuda.is_available():
+        peak = torch.cuda.max_memory_allocated() / 1024**3
+        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        print(f"[PEAK VRAM] {peak:.2f} GiB of {total:.2f} GiB ({100*peak/total:.0f}% used)")
 
     # 8. Save Final Model & Processor
     print(f"[SAVING MODEL] Saving best fine-tuned QLoRA model to '{args.output_dir}'...")

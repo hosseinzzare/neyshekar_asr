@@ -88,10 +88,23 @@ def get_whisper_qlora_model(
         # With fp32 weights + bf16 autocast, matmuls still run on tensor cores at 16-bit speed,
         # every cast is handled automatically, and the LoRA parameters stay fp32 so the
         # optimizer remains numerically stable.
+        # dtype=torch.float32 MUST be explicit. whisper-large-v3's config.json declares
+        # "torch_dtype": "float16", and modern transformers honours that when no dtype is
+        # given -- so omitting it silently loads fp16 weights, the Trainer then skips its
+        # autocast wrapper, and fp32 input_features hit a half-precision conv1:
+        #   RuntimeError: Input type (float) and bias type (c10::Half) should be the same
         model = WhisperForConditionalGeneration.from_pretrained(
             model_name_or_path,
+            dtype=torch.float32,
             device_map="auto"
         )
+        loaded_dtype = next(model.parameters()).dtype
+        if loaded_dtype != torch.float32:
+            raise RuntimeError(
+                f"Expected fp32 base weights but got {loaded_dtype}. Mixed precision is meant to "
+                f"be handled by the Trainer's autocast; 16-bit weights here cause a dtype "
+                f"mismatch against the fp32 input_features produced by the data collator."
+            )
         print("[QUANTIZATION] DISABLED -- fp32 weights (~6.2 GB) with autocast mixed precision, "
               "no dequantization overhead, LoRA adapts EXACT weights")
 
