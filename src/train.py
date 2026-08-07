@@ -146,6 +146,16 @@ def parse_args():
         )
     )
     parser.add_argument(
+        "--fp16_features",
+        action="store_true",
+        help=(
+            "Cache log-Mel features as float16 instead of float32, halving the on-disk "
+            "requirement from ~60 GB to ~30 GB for the full corpus. The values are log-scale "
+            "and sit well inside float16's range, and autocast re-casts them before the model "
+            "sees them. Use when disk is tight."
+        )
+    )
+    parser.add_argument(
         "--no_vad_trim",
         action="store_true",
         help="Disable trimming of leading/trailing silence before feature extraction."
@@ -220,7 +230,8 @@ def run_training_pipeline(args=None):
         max_samples=max_samples,
         max_shards=args.max_shards,
         enable_vad_trim=config.ENABLE_VAD_TRIM and not args.no_vad_trim,
-        enable_peak_norm=config.ENABLE_PEAK_NORM and not args.no_peak_norm
+        enable_peak_norm=config.ENABLE_PEAK_NORM and not args.no_peak_norm,
+        feature_dtype="float16" if args.fp16_features else "float32"
     )
 
     # Guard against accidentally producing "final" numbers from a partial download.

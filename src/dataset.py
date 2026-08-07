@@ -167,6 +167,7 @@ def prepare_dataset(
     processor: Any,
     enable_vad_trim: bool = config.ENABLE_VAD_TRIM,
     enable_peak_norm: bool = config.ENABLE_PEAK_NORM,
+    feature_dtype: str = "float32",
 ) -> Dict[str, Any]:
     """
     Preprocesses a single sample for Whisper model:
@@ -318,8 +319,16 @@ def prepare_dataset(
         max_length=448,
     ).input_ids
 
+    # Each cached feature is 128 mel x 3000 frames. In float32 that is 1.54 MB per sample,
+    # so the full 39,332-sample corpus needs ~60 GB of disk. float16 halves that to ~30 GB at
+    # negligible cost: the values are log-scale and sit well inside float16's range, and the
+    # Trainer's autocast casts them again before they reach the model anyway.
+    feats = inputs.input_features[0]
+    if feature_dtype == "float16":
+        feats = feats.astype(np.float16)
+
     return {
-        "input_features": inputs.input_features[0],
+        "input_features": feats,
         "labels": labels
     }
 
@@ -532,7 +541,8 @@ def get_datasets_and_collator(
     num_proc: Optional[int] = 1,
     max_shards: Optional[int] = None,
     enable_vad_trim: bool = config.ENABLE_VAD_TRIM,
-    enable_peak_norm: bool = config.ENABLE_PEAK_NORM
+    enable_peak_norm: bool = config.ENABLE_PEAK_NORM,
+    feature_dtype: str = "float32"
 ) -> tuple[Any, Any, Any, Any]:
     """
     Main entry point function returning (train_dataset, val_dataset, processor, data_collator).
@@ -573,6 +583,25 @@ def get_datasets_and_collator(
             "WER/CER and best-checkpoint selection can actually run."
         )
 
+    # Estimate the disk the cached features will need, and say so BEFORE spending ~35 minutes
+    # extracting them. Running out of space mid-map wastes the whole preparation phase.
+    n_total = len(dataset_dict["train"]) + len(dataset_dict["validation"])
+    bytes_each = 128 * 3000 * (2 if feature_dtype == "float16" else 4)
+    need_gb = n_total * bytes_each / 1e9
+    try:
+        import shutil
+        free_gb = shutil.disk_usage(os.path.expanduser("~")).free / 1e9
+    except Exception:
+        free_gb = None
+    print(f"[DISK] Cached features will need ~{need_gb:.0f} GB "
+          f"({n_total:,} samples x {bytes_each/1e6:.2f} MB, dtype={feature_dtype})")
+    if free_gb is not None:
+        print(f"[DISK] Free space: {free_gb:.0f} GB")
+        if free_gb < need_gb * 1.15:
+            print(f"[DISK][WARNING] Only {free_gb:.0f} GB free for a ~{need_gb:.0f} GB job. "
+                  f"Feature extraction may fail part-way. Re-run with --fp16_features to halve "
+                  f"the requirement, and clear ~/.cache/huggingface/datasets of old runs.")
+
     print(f"[AUDIO PREP] VAD silence trim: {'ON' if enable_vad_trim else 'OFF'} "
           f"(top_db={config.VAD_TOP_DB}, margin={config.VAD_MARGIN_MS}ms, "
           f"min_duration={config.VAD_MIN_DURATION_S}s) | "
@@ -586,6 +615,7 @@ def get_datasets_and_collator(
             "processor": processor,
             "enable_vad_trim": enable_vad_trim,
             "enable_peak_norm": enable_peak_norm,
+            "feature_dtype": feature_dtype,
         },
         "remove_columns": dataset_dict["train"].column_names,
         "desc": "Preparing Features",
@@ -603,6 +633,7 @@ def get_datasets_and_collator(
             "processor": processor,
             "enable_vad_trim": enable_vad_trim,
             "enable_peak_norm": enable_peak_norm,
+            "feature_dtype": feature_dtype,
         },
         "remove_columns": dataset_dict["validation"].column_names,
         "desc": "Preparing Features",
