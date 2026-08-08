@@ -32,3 +32,9 @@ Thumbs.db
 smoke-test*/
 smoke-l4*/
 ablation-*/
+ab-*/
+ablation_results.json
+
+# Temporary verification clone created by verify_github.bat
+test_clone/
+verify_clone/
