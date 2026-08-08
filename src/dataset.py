@@ -254,24 +254,26 @@ def prepare_dataset(
         except Exception:
             pass
 
-    # 3. FAIL LOUDLY if audio could not be decoded.
+    # 3. Undecodable audio: MARK the sample, never silently substitute silence.
     #
-    # This used to silently substitute a zero (pure silence) waveform. That is dangerous: training
-    # would appear to run perfectly while the model was being taught to map SILENCE -> real Persian
-    # transcripts. That is precisely the "hallucination on silence" failure mode documented in the
-    # Task 1 report, and it produces no error, no warning, and no obviously wrong loss curve --
-    # it would only surface as inexplicably bad WER after burning a full training run.
-    # Given the cost of a full fine-tune, crashing early with a clear message is strictly better.
+    # Earlier versions quietly swapped in a zero waveform here, which would have taught the model
+    # to map SILENCE -> real Persian transcripts: no error, no warning, no obviously wrong loss
+    # curve, just inexplicably bad WER after a full training run.
+    #
+    # Raising instead is safe but brutal on a single-shot run: one bad file out of 39,332 would
+    # kill ~35 minutes of feature extraction. So the sample is flagged with `_decode_ok=False`
+    # and DROPPED by the caller immediately after .map(), before anything reaches training.
+    # The caller also aborts if the failure RATE is above the configured threshold, which is what
+    # actually distinguishes "one corrupt file" from "the dataset did not download properly".
     if audio_array is None:
-        raise RuntimeError(
-            "Failed to decode audio for a sample (no usable 'array', 'bytes', or readable 'path').\n"
-            f"  transcript preview : {str(text)[:80]!r}\n"
-            f"  audio field type   : {type(audio_data).__name__}\n"
-            f"  audio_path         : {audio_path!r}\n"
-            "Refusing to substitute a zero/silent waveform, because that would silently train the "
-            "model to transcribe silence into text. Check that the HuggingFace dataset was fully "
-            "downloaded and that the 'audio' column was cast with Audio(sampling_rate=16000)."
-        )
+        print(f"[DECODE][WARNING] Could not decode audio for id={batch.get('id')!r} "
+              f"(audio field type: {type(audio_data).__name__}) -- sample will be dropped.")
+        return {
+            "input_features": np.zeros((128, 3000), dtype=np.float16
+                                       if feature_dtype == "float16" else np.float32),
+            "labels": processor.tokenizer(str(text), truncation=True, max_length=448).input_ids,
+            "_decode_ok": False,
+        }
 
     # 4. Normalize waveform shape/dtype: force ndarray, mono, float32.
     audio_array = np.asarray(audio_array)
@@ -329,7 +331,8 @@ def prepare_dataset(
 
     return {
         "input_features": feats,
-        "labels": labels
+        "labels": labels,
+        "_decode_ok": True,
     }
 
 
@@ -642,6 +645,48 @@ def get_datasets_and_collator(
     if num_proc is not None and num_proc > 1:
         val_map_kwargs["num_proc"] = num_proc
     val_mapped = dataset_dict["validation"].map(prepare_dataset, **val_map_kwargs)
+
+    # Drop samples whose audio could not be decoded.
+    #
+    # They carry a placeholder zero waveform, so they MUST be removed before training -- a silent
+    # sample paired with a real transcript is exactly what teaches Whisper to hallucinate over
+    # silence. Dropping a handful of genuinely corrupt files is harmless; a high failure RATE
+    # means something systemic (an incomplete download, the wrong dataset version) and is fatal.
+    def _drop_undecodable(ds, split_name):
+        if "_decode_ok" not in ds.column_names:
+            return ds
+        before = len(ds)
+
+        # Read ONLY the boolean column to count failures. Arrow is columnar, so this touches a
+        # few kilobytes rather than the ~60 GB of cached features -- and it lets us skip the
+        # filter entirely in the normal case where nothing failed.
+        flags = ds["_decode_ok"]
+        dropped = sum(1 for ok in flags if not ok)
+
+        if not dropped:
+            print(f"[DECODE] All {before:,} {split_name} samples decoded successfully.")
+            return ds
+
+        rate = dropped / before
+        print(f"[DECODE] {dropped:,} of {before:,} {split_name} samples ({100 * rate:.3f}%) "
+              f"could not be decoded and will be dropped.")
+        if rate > config.MAX_DECODE_FAILURE_RATE:
+            raise RuntimeError(
+                f"{100 * rate:.2f}% of {split_name} audio failed to decode, above the "
+                f"{100 * config.MAX_DECODE_FAILURE_RATE:.2f}% threshold. A few corrupt files "
+                f"would be tolerable; this many indicates a systemic problem -- most likely an "
+                f"incomplete download or a dataset version that does not match the Task 1 CSVs. "
+                f"Training on what remains would silently use a truncated corpus."
+            )
+        # filter() stores an indices mapping rather than rewriting the table, so this does not
+        # duplicate the cached features on disk.
+        ds = ds.filter(lambda ok: ok, input_columns="_decode_ok",
+                       desc=f"Dropping undecodable {split_name} samples")
+        print(f"[DECODE] {split_name}: {len(ds):,} samples remain.")
+        return ds
+
+    train_mapped = _drop_undecodable(train_mapped, "train")
+    val_mapped = _drop_undecodable(val_mapped, "validation")
 
     # STRICT SANITIZATION: Explicitly remove any column other than 'input_features' and 'labels'
     cols_to_keep = {"input_features", "labels"}

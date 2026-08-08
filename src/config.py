@@ -54,6 +54,13 @@ class Config:
     ENABLE_PEAK_NORM = True
     PEAK_NORM_DB = -3.0
 
+    # Tolerance for audio that cannot be decoded. Individual corrupt files are dropped (never
+    # replaced with silence, which would teach the model to transcribe nothing into text), but a
+    # failure rate above this threshold means something systemic -- an incomplete download or a
+    # mismatched dataset version -- and aborts the run. Task 1 found 0 unreadable files in all
+    # 40,008, so anything above a handful is suspicious.
+    MAX_DECODE_FAILURE_RATE = 0.005      # 0.5%
+
     # -------------------------------------------------------------
     # 4. QLoRA Optimization (4-bit Quantization + PEFT)
     # -------------------------------------------------------------
@@ -157,6 +164,7 @@ VAD_MARGIN_MS = Config.VAD_MARGIN_MS
 VAD_MIN_DURATION_S = Config.VAD_MIN_DURATION_S
 ENABLE_PEAK_NORM = Config.ENABLE_PEAK_NORM
 PEAK_NORM_DB = Config.PEAK_NORM_DB
+MAX_DECODE_FAILURE_RATE = Config.MAX_DECODE_FAILURE_RATE
 LOAD_IN_4BIT = Config.LOAD_IN_4BIT
 BNB_4BIT_QUANT_TYPE = Config.BNB_4BIT_QUANT_TYPE
 BNB_4BIT_COMPUTE_DTYPE = Config.BNB_4BIT_COMPUTE_DTYPE

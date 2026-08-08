@@ -133,6 +133,17 @@ if ds:
     check("labels must come from cleaned_text", must_contain(ds, '"cleaned_text" not in batch'),
           "could silently use raw uncleaned text")
 
+    # Undecodable audio is flagged and dropped, never silently replaced by silence. A high
+    # failure RATE (incomplete download, wrong dataset version) still aborts the run.
+    check("undecodable audio is flagged", must_contain(ds, '"_decode_ok": False'))
+    check("flagged samples are filtered out", must_contain(ds, 'input_columns="_decode_ok"'),
+          "a zero waveform paired with a real transcript teaches hallucination")
+    check("systemic decode failure aborts", must_contain(ds, "MAX_DECODE_FAILURE_RATE"))
+    if ds and "_drop_undecodable(train_mapped" in ds and "STRICT SANITIZATION" in ds:
+        check("undecodable rows dropped before column sanitisation",
+              ds.index("_drop_undecodable(train_mapped") < ds.index("STRICT SANITIZATION"),
+              "the _decode_ok column would be stripped before it could be used")
+
     check("labels truncated to Whisper's 448 limit", must_contain(ds, "max_length=448"))
     check("partial-shard download supported", must_contain(ds, "verification_mode"))
 
@@ -191,8 +202,13 @@ check("metrics do not mutate label_ids in place",
 
 tr = read("src/train.py")
 for flag in ("--max_shards", "--max_eval_samples", "--final_full_eval", "--eval_steps",
-             "--no_quantization", "--no_vad_trim", "--no_peak_norm"):
+             "--no_quantization", "--no_vad_trim", "--no_peak_norm", "--resume",
+             "--fp16_features"):
     check(f"train.py exposes {flag}", must_contain(tr, f'"{flag}"'))
+
+check("resume is wired into trainer.train()",
+      must_contain(tr, "trainer.train(resume_from_checkpoint=resume_from)"),
+      "an interrupted multi-hour run would have to restart from zero")
 
 # transformers raises if fp16 and bf16 are both enabled, and mixing bf16 weights with an
 # fp16 autocast context can silently destabilise training.

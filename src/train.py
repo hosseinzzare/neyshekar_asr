@@ -146,6 +146,19 @@ def parse_args():
         )
     )
     parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="auto",
+        default=None,
+        metavar="CHECKPOINT",
+        help=(
+            "Resume an interrupted run. '--resume' alone picks the newest checkpoint in "
+            "--output_dir; pass a path to choose one explicitly. Optimizer state, scheduler "
+            "state and step count are all restored, so a dropped session costs minutes rather "
+            "than restarting a multi-hour run from zero."
+        )
+    )
+    parser.add_argument(
         "--fp16_features",
         action="store_true",
         help=(
@@ -370,11 +383,28 @@ def run_training_pipeline(args=None):
 
     trainer = Seq2SeqTrainer(**trainer_kwargs)
 
-    # 7. Execute Training
+    # 7. Resolve where to resume from, if anywhere.
+    resume_from = None
+    if args.resume:
+        if args.resume == "auto":
+            from transformers.trainer_utils import get_last_checkpoint
+            if os.path.isdir(args.output_dir):
+                resume_from = get_last_checkpoint(args.output_dir)
+            if resume_from is None:
+                print(f"[RESUME] No checkpoint found in '{args.output_dir}' -- starting from scratch.")
+            else:
+                print(f"[RESUME] Resuming from {resume_from}")
+        else:
+            if not os.path.isdir(args.resume):
+                raise FileNotFoundError(f"--resume path does not exist: {args.resume}")
+            resume_from = args.resume
+            print(f"[RESUME] Resuming from {resume_from}")
+
+    # 8. Execute Training
     print("[TRAINING] Starting training execution...")
     if torch is not None and torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
-    train_result = trainer.train()
+    train_result = trainer.train(resume_from_checkpoint=resume_from)
 
     # Report peak VRAM. This is what decides whether a configuration is viable at all --
     # gradient checkpointing and quantization are both memory/speed trades, so the peak figure
