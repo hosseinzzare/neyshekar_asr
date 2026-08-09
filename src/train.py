@@ -234,8 +234,43 @@ def run_training_pipeline(args=None):
     print(f"  - Output Dir:       {args.output_dir}")
     print("="*70 + "\n")
 
-    # 2. Prepare Datasets, Processor, and Data Collator (enable subset mode if max_steps is set for fast Colab smoke testing)
     is_smoke_test = args.max_steps is not None and args.max_steps > 0
+
+    # 1b. Resolve and VALIDATE the eval/save schedule BEFORE touching the dataset.
+    #
+    #     Every argument-level mistake must surface here, in the first second, rather than after
+    #     the ~45 minutes of download and feature extraction. transformers validates this
+    #     combination only when Seq2SeqTrainingArguments is constructed, which happens after all
+    #     the expensive work -- exactly where a one-shot session can least afford it.
+    if args.eval_steps is not None:
+        eval_steps = args.eval_steps
+    elif is_smoke_test:
+        eval_steps = max(1, args.max_steps // 3)
+    else:
+        eval_steps = config.EVAL_STEPS
+
+    # load_best_model_at_end requires save_steps to be a round multiple of eval_steps. When only
+    # --eval_steps is overridden, save_steps must FOLLOW it: leaving the config default behind
+    # produced eval=1500 / save=500, which transformers rejects.
+    if args.save_steps is not None:
+        save_steps = args.save_steps
+    elif args.eval_steps is not None or is_smoke_test:
+        save_steps = eval_steps
+    else:
+        save_steps = config.SAVE_STEPS
+
+    if config.LOAD_BEST_MODEL_AT_END and save_steps % eval_steps != 0:
+        raise ValueError(
+            f"save_steps ({save_steps}) must be a round multiple of eval_steps ({eval_steps}) "
+            f"because load_best_model_at_end is enabled.\n"
+            f"  Fix: pass --save_steps {eval_steps} (or any multiple of it), or drop --eval_steps."
+        )
+    print(f"[SCHEDULE] eval every {eval_steps} steps | checkpoint every {save_steps} steps")
+    if is_smoke_test:
+        print(f"[SMOKE TEST] Auto-scaled from max_steps={args.max_steps} so the "
+              f"eval/WER/CER/checkpoint path is actually exercised, not just the loss path.")
+
+    # 2. Prepare Datasets, Processor, and Data Collator (enable subset mode if max_steps is set for fast Colab smoke testing)
     max_samples = 1000 if is_smoke_test else None
     train_dataset, val_dataset, processor, data_collator = get_datasets_and_collator(
         train_csv=args.train_csv,
@@ -251,30 +286,6 @@ def run_training_pipeline(args=None):
     if args.max_shards and not is_smoke_test:
         print("\n[WARNING] --max_shards is set on a FULL training run. Only part of the corpus was "
               "downloaded, so these results are NOT reportable. Remove --max_shards for the real run.\n")
-
-    # 2b. Resolve eval/save step frequency.
-    #     IMPORTANT: config.EVAL_STEPS/SAVE_STEPS default to 100, which is larger than a typical
-    #     smoke-test run (e.g. --max_steps 30). If left as-is, the smoke test would finish without
-    #     ever triggering an eval/generate/WER-CER/checkpoint-save cycle -- exactly the code paths
-    #     most likely to hide a bug (predict_with_generate, compute_metrics, best-model selection).
-    #     So unless explicitly overridden, we auto-scale eval/save steps down during smoke tests.
-    if args.eval_steps is not None:
-        eval_steps = args.eval_steps
-    elif is_smoke_test:
-        eval_steps = max(1, args.max_steps // 3)
-    else:
-        eval_steps = config.EVAL_STEPS
-
-    if args.save_steps is not None:
-        save_steps = args.save_steps
-    else:
-        # load_best_model_at_end requires save_steps to be a round multiple of eval_steps
-        save_steps = eval_steps if is_smoke_test else config.SAVE_STEPS
-
-    if is_smoke_test:
-        print(f"[SMOKE TEST] Auto-scaled eval_steps={eval_steps}, save_steps={save_steps} "
-              f"(max_steps={args.max_steps}) so the eval/WER/CER/checkpoint path is actually "
-              f"exercised, not just the training loss path.")
 
     # 2c. Optionally subsample the validation set used for PERIODIC evaluation.
     #     Kept separate from the full split so the final reported metrics can still be computed
