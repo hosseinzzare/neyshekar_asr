@@ -39,7 +39,8 @@ EVAL = [
     (6270, 3.0000, 0.085669,  8.17, 1.90),
 ]
 FINAL_WER, FINAL_CER = 8.05, 2.00     # full 5,900-sample validation split
-STEPS_PER_EPOCH, TOTAL_STEPS = 2089, 6270
+# ceil(ceil(33,432 / 8) / 2) = 2,090 optimizer steps per epoch, hence 6,270 over three epochs.
+STEPS_PER_EPOCH, TOTAL_STEPS = 2090, 6270
 
 BLUE, RED, GREEN, PURPLE, ORANGE, GREY = (
     "#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#999999")
