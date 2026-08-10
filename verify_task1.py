@@ -68,11 +68,21 @@ REPORT = {
     "exact_dups": 134,
     "long_excess_dropped": 532,
     "final_total": 39332,
-    "max_duration": 24.36,
-    "mean_duration": 5.67,
-    "low_cps": 10983,
+    "max_duration": 27.18,
+    "mean_duration": 5.69,
+    # Recomputed from the raw shards rather than copied from the first exploratory run: the
+    # notebook that produced the original 10,983 measured at a slightly earlier pipeline stage.
+    # The report quotes whatever this script reproduces, so the two can never drift apart.
+    "low_cps": 11036,
     "clipped": 8693,
+    "short_dup_preserved": 3479,
+    "long_repeats_preserved": 18520,
+    "long_repeats_capped_kept": 1191,
 }
+
+# Thresholds the Task 1 report used when flagging suspicious samples.
+CPS_SUSPICIOUS = 8.0        # characters per second below which audio is mostly silence
+CLIP_CEILING = 0.99         # peak amplitude at or above which a file is treated as clipped
 
 ARABIC = re.compile(r"[\u064a\u0643\u0629\u0623\u0625\u0671\u0624\u0626\u0649]")
 DIGITS = re.compile(r"[\d\u06f0-\u06f9\u0660-\u0669]")
@@ -90,7 +100,25 @@ def is_short(text: str) -> bool:
     return (len(text) < 15) or (len(text.split()) < 4)
 
 
-def load_raw(raw_dir: str, skip_audio: bool) -> pd.DataFrame:
+def peak_amplitude(blob) -> float:
+    """
+    Peak absolute amplitude of one audio blob, or NaN if it cannot be decoded.
+
+    Used only to re-count clipped files. Reads from the in-memory bytes rather than a
+    temporary file so nothing touches disk.
+    """
+    import io
+    import soundfile as sf
+    try:
+        data, _ = sf.read(io.BytesIO(blob["bytes"]), dtype="float32")
+        if data.ndim > 1:
+            data = data.mean(axis=1)
+        return float(np.abs(data).max()) if data.size else 0.0
+    except Exception:
+        return float("nan")
+
+
+def load_raw(raw_dir: str, skip_audio: bool, check_clipping: bool = False) -> pd.DataFrame:
     # Look in the given folder first, then one level down (HF layouts keep shards in data/),
     # then anywhere beneath it. 'investigation_results/' holds Task 1 intermediates, not raw
     # shards, so it is excluded to avoid mixing pre-cleaned data into the raw baseline.
@@ -110,17 +138,22 @@ def load_raw(raw_dir: str, skip_audio: bool) -> pd.DataFrame:
     print(f"[LOAD] Found {len(files)} parquet shard(s) under {raw_dir}")
     print(f"       first: {files[0]}")
 
-    cols = ["id", "text", "duration"] + ([] if skip_audio else ["audio"])
+    need_audio = (not skip_audio) or check_clipping
+    cols = ["id", "text", "duration"] + (["audio"] if need_audio else [])
     frames = []
     for i, path in enumerate(files, 1):
         df = pd.read_parquet(path, columns=cols)
-        if not skip_audio:
-            # Hash immediately, then drop the bytes so memory stays flat.
-            df["audio_hash"] = df["audio"].apply(
-                lambda a: hashlib.md5(a["bytes"]).hexdigest()
-                if isinstance(a, dict) and a.get("bytes") is not None
-                else str(a)
-            )
+        if need_audio:
+            # Derive everything needed from the bytes here, then drop them, so peak memory
+            # stays at one shard rather than the whole 7 GB corpus.
+            if not skip_audio:
+                df["audio_hash"] = df["audio"].apply(
+                    lambda a: hashlib.md5(a["bytes"]).hexdigest()
+                    if isinstance(a, dict) and a.get("bytes") is not None
+                    else str(a)
+                )
+            if check_clipping:
+                df["peak_amp"] = df["audio"].apply(peak_amplitude)
             df = df.drop(columns=["audio"])
         frames.append(df)
         print(f"       shard {i}/{len(files)}: {len(df):,} rows")
@@ -149,12 +182,15 @@ def main():
     ap.add_argument("--val_csv", default="data/val.csv")
     ap.add_argument("--skip_audio", action="store_true",
                     help="Skip audio hashing (much faster; exact-duplicate count unavailable)")
+    ap.add_argument("--check_clipping", action="store_true",
+                    help="Decode every waveform to re-count clipped files. Slow (~10 min) "
+                         "because it decodes all 40k files; everything else needs only metadata.")
     args = ap.parse_args()
 
     if not args.raw_dir:
         ap.error("--raw_dir is required (or set NEYSHEKAR_RAW_DIR)")
 
-    df = load_raw(args.raw_dir, args.skip_audio)
+    df = load_raw(args.raw_dir, args.skip_audio, args.check_clipping)
     problems = []
 
     print("\n" + "=" * 74)
@@ -204,19 +240,74 @@ def main():
         stage1 = valid[~dup_mask].copy().reset_index(drop=True)
 
     stage1["fp"] = stage1["normalized_text"].apply(fingerprint)
-    excess = 0
+    drop_idx = []
     for _, idx in stage1.groupby("fp").groups.items():
         if len(idx) > MAX_COPIES_PER_LONG_TEXT:
             if not is_short(stage1.loc[idx[0], "normalized_text"]):
-                excess += len(idx) - MAX_COPIES_PER_LONG_TEXT
+                # data_prep.py keeps the first MAX_COPIES_PER_LONG_TEXT rows in file order.
+                drop_idx.extend(list(idx)[MAX_COPIES_PER_LONG_TEXT:])
+    excess = len(drop_idx)
     problems.append(row("long-text excess copies dropped", excess, REPORT["long_excess_dropped"]))
 
-    final_n = len(stage1) - excess
+    # Split the surviving long-text repeats into the two groups the report distinguishes:
+    # sentences that occurred 2-3 times on their own, and sentences that occurred more often
+    # and were cut back to the cap. Both are "preserved", but only the second involved a
+    # deliberate loss of acoustic variety, so they are worth reporting separately.
+    natural_2_3, retained_from_capped = 0, 0
+    for _, idx in stage1.groupby("fp").groups.items():
+        if is_short(stage1.loc[idx[0], "normalized_text"]):
+            continue
+        if 2 <= len(idx) <= MAX_COPIES_PER_LONG_TEXT:
+            natural_2_3 += len(idx)
+        elif len(idx) > MAX_COPIES_PER_LONG_TEXT:
+            retained_from_capped += MAX_COPIES_PER_LONG_TEXT
+    problems.append(row("long repeats preserved (2-3 copies)", natural_2_3,
+                        REPORT["long_repeats_preserved"]))
+    problems.append(row("long repeats kept after capping", retained_from_capped,
+                        REPORT["long_repeats_capped_kept"]))
+
+    # Materialise the final set rather than only counting it. The suspicious-sample figures
+    # below are quoted in the report as percentages of the 39,332 records that training
+    # actually sees, so they have to be measured on that set -- computing them on stage1
+    # silently includes the 532 rows that were about to be dropped.
+    final_df = stage1.drop(index=drop_idx).reset_index(drop=True)
+    final_n = len(final_df)
     problems.append(row("FINAL cleaned records", final_n, REPORT["final_total"]))
+
+    # Short conversational phrases are exempt from the duplicate cap. The report quotes this
+    # figure inside the duplicate analysis, so it counts short rows that ARE duplicated,
+    # not every short row in the corpus.
+    fp_counts = stage1["fp"].value_counts()
+    short_dup = int(sum(
+        1 for t, k in zip(stage1["normalized_text"], stage1["fp"])
+        if is_short(t) and fp_counts[k] > 1
+    ))
+    problems.append(row("short duplicated phrases preserved", short_dup,
+                        REPORT["short_dup_preserved"]))
+
+    # ---- suspicious samples: the two findings that drove the Task 2 preprocessing ----
+    print("\n" + "=" * 74)
+    print(" 5. SUSPICIOUS SAMPLES (thresholds as used in the report)")
+    print("=" * 74)
+    cps = final_df["normalized_text"].str.len() / pd.to_numeric(final_df["duration"], errors="coerce")
+    n_low = int((cps < CPS_SUSPICIOUS).sum())
+    problems.append(row(f"characters per second < {CPS_SUSPICIOUS}", n_low, REPORT["low_cps"]))
+    print(f"  {'  as a share of the final set':<44} {100 * n_low / final_n:>11.2f}%")
+    print(f"  {'CPS mean / median':<44} {cps.mean():>6.2f} / {cps.median():.2f}")
+
+    if args.check_clipping:
+        peak = pd.to_numeric(final_df["peak_amp"], errors="coerce")
+        n_clip = int((peak >= CLIP_CEILING).sum())
+        problems.append(row(f"peak amplitude >= {CLIP_CEILING} (clipped)",
+                            n_clip, REPORT["clipped"]))
+        print(f"  {'  as a share of the final set':<44} {100 * n_clip / final_n:>11.2f}%")
+        print(f"  {'files that failed to decode':<44} {int(peak.isna().sum()):>12,}")
+    else:
+        print("  clipped-file count                               (skipped: pass --check_clipping)")
 
     # ---- confirm the committed CSVs match what we just recomputed ----
     print("\n" + "=" * 74)
-    print(" 5. COMMITTED CSVs (what Task 2 actually trains on)")
+    print(" 6. COMMITTED CSVs (what Task 2 actually trains on)")
     print("=" * 74)
     try:
         tr = pd.read_csv(args.train_csv)
@@ -234,6 +325,24 @@ def main():
                             int(all_txt.apply(lambda t: bool(DIGITS.search(t))).sum()), 0))
         d2 = pd.to_numeric(pd.concat([tr["duration"], va["duration"]]), errors="coerce")
         row("mean duration (s)", float(d2.mean()), REPORT["mean_duration"], fmt="{:.2f}", tol=0.01)
+        row("max duration in committed CSVs (s)", float(d2.max()), REPORT["max_duration"],
+            fmt="{:.2f}", tol=0.01)
+
+        # Splitting on id keeps the same recording out of both halves, but says nothing about
+        # the SENTENCES. Where a transcript recurs across speakers, the same text can land in
+        # both splits with different audio. That is not leakage in the usual sense -- no
+        # validation waveform was trained on -- but the decoder's language prior has seen the
+        # sentence, so validation WER reads better than it would on unseen text. Reported here
+        # because the figure belongs in the answer to "are there duplicated transcripts".
+        tr_fps = set(tr["cleaned_text"].astype(str).map(fingerprint))
+        va_fp = va["cleaned_text"].astype(str).map(fingerprint)
+        shared = va_fp.isin(tr_fps)
+        va_long = va["cleaned_text"].astype(str).map(lambda t: not is_short(t))
+        print(f"\n  {'val transcripts also seen in train':<44} "
+              f"{int(shared.sum()):>12,}  ({100 * shared.mean():.1f}% of val)")
+        print(f"  {'  of which are long transcripts':<44} "
+              f"{int((shared & va_long).sum()):>12,}  "
+              f"({100 * (shared & va_long).mean():.1f}% of val)")
     except FileNotFoundError as e:
         print(f"  [skipped] {e}")
 
