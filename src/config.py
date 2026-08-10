@@ -39,8 +39,8 @@ class Config:
     # -------------------------------------------------------------
     # 3b. Audio Preprocessing (the Task 1 investigation called for these)
     # -------------------------------------------------------------
-    # Task 1 found 27.9% of clips with a suspiciously low character-per-second rate (long
-    # silences) and 22.1% touching the digital ceiling (clipping). Whisper's autoregressive
+    # Task 1 found 28.06% of clips with a suspiciously low character-per-second rate (long
+    # silences) and 22.10% touching the digital ceiling (clipping). Whisper's autoregressive
     # decoder is known to hallucinate text over silence, so leading/trailing silence is trimmed
     # before feature extraction. Only the EDGES are trimmed -- pauses inside an utterance are
     # natural speech and are deliberately preserved.
@@ -97,16 +97,20 @@ class Config:
     GRADIENT_ACCUMULATION_STEPS = 2  # Effective Batch Size = 16
     FP16 = True
     # Gradient checkpointing recomputes activations during the backward pass instead of storing
-    # them: much lower VRAM, but ~1.3-1.5x slower. Required on a 16 GB T4; on a 24 GB L4 it can
-    # be disabled with --no_gradient_checkpointing for a free speedup (gradients are identical).
+    # them: much lower VRAM, but slower. This was measured rather than assumed, and the earlier
+    # comment here -- that it could be switched off on a 24 GB card for a free speedup -- was
+    # wrong. Two ablation runs with --no_gradient_checkpointing both died with CUDA out of
+    # memory on the 22.03 GiB L4 (see ablation_logs.tar.gz in the model repository). With it
+    # enabled the real run peaked at 5.51 GiB. It is a requirement on this hardware, not a knob.
     GRADIENT_CHECKPOINTING = True
     DATALOADER_NUM_WORKERS = 2
     EVAL_STRATEGY = "steps"
-    # With ~2,089 steps/epoch (33,432 train rows / effective batch 16), 3 epochs is ~6,267 steps.
-    # EVAL_STEPS=100 would mean 62 evaluations; each one runs autoregressive generate() over the
-    # full 5,900-row validation set, which costs roughly 4-8 HOURS of pure evaluation overhead on
-    # top of training. 500 gives ~12 evaluation points -- still plenty of resolution for the
-    # Task 3 loss/WER/CER curves, at a fraction of the cost.
+    # ceil(ceil(33,432 / 8) / 2) = 2,090 optimizer steps per epoch, so 3 epochs is 6,270 steps.
+    # Every evaluation runs autoregressive generate() rather than teacher forcing, so it is
+    # expensive: the measured cost was 586 s per evaluation over the 1,500-row subset below,
+    # and 6,779 s over the full 5,900-row split. At EVAL_STEPS=500 that is 12 evaluations and
+    # roughly two extra hours; the reported run used --eval_steps 1500, giving 5 evaluation
+    # points for 49 minutes of overhead -- enough resolution for the Task 3 curves.
     EVAL_STEPS = 500
     SAVE_STEPS = 500
 
