@@ -1,3 +1,15 @@
+# Minimum versions the code was written against, not a lock file.
+#
+# These are floors, so a fresh install will pick up whatever is current and may not reproduce
+# the published run byte for byte. The exact environment of that run was not captured with
+# `pip freeze` before the machine was released, which is the one gap in this project's
+# reproducibility story and is recorded here rather than papered over. What the training log
+# does establish is transformers 5.x, from a deprecation notice naming v5.2 as a future
+# release, and the hardware and precision settings, which are printed at the top of every run.
+#
+# For a run that must be reproduced exactly, capture `pip freeze > requirements.lock`
+# alongside the checkpoint.
+
 torch>=2.0.0
 transformers>=4.40.0
 datasets>=2.18.0
