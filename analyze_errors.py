@@ -95,6 +95,10 @@ def main():
     p.add_argument("--out", default="error_analysis.csv")
     p.add_argument("--no_quantization", action="store_true",
                    help="load the base model in fp16 instead of 4-bit (needs ~7 GB VRAM)")
+    p.add_argument("--zero_shot", action="store_true",
+                   help="skip the adapter and transcribe with the untouched base model. "
+                        "Gives the baseline the fine-tuned figure has to be compared against; "
+                        "without it, a WER of 8%% means nothing on its own.")
     args = p.parse_args()
 
     if not torch.cuda.is_available():
@@ -122,12 +126,21 @@ def main():
         base = WhisperForConditionalGeneration.from_pretrained(
             config.MODEL_NAME_OR_PATH, quantization_config=qc, device_map="auto")
 
-    model = PeftModel.from_pretrained(base, args.adapter)
+    if args.zero_shot:
+        # The baseline has to differ from the fine-tuned run in exactly one respect: no adapter.
+        # Same audio, same preprocessing, same generation settings, same 200 sampled rows, so
+        # the difference between the two numbers is attributable to the fine-tuning and nothing
+        # else.
+        model = base
+        print("[MODEL] ZERO-SHOT: base model only, no adapter applied")
+    else:
+        model = PeftModel.from_pretrained(base, args.adapter)
+        print(f"[MODEL] adapter loaded from {args.adapter}")
+
     model.eval()
     model.generation_config.language = config.LANGUAGE
     model.generation_config.task = config.TASK
     model.generation_config.forced_decoder_ids = None
-    print(f"[MODEL] adapter loaded from {args.adapter}")
 
     # ---- transcribe ----
     rows = []
