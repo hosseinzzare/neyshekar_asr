@@ -195,4 +195,55 @@ tensorboard --logdir ./logs
 - **Dataset Processing:** Uses `writer_batch_size=500` during feature extraction to flush Arrow cache to disk, preventing RAM OOM.
 
 ---
+
+## 🐳 Inference Service (Docker)
+
+The trained adapter is packaged as an HTTP service so the model can be used without installing
+anything.
+
+```bash
+docker build -t neyshekar-asr .
+
+# -v keeps the 3 GB base model between runs; without it every start re-downloads it.
+docker run -p 8000:8000 -v neyshekar-cache:/cache neyshekar-asr
+```
+
+Then open <http://localhost:8000> for a small upload form, or call it directly:
+
+```bash
+curl -F "file=@clip.wav" http://localhost:8000/transcribe
+# {"text":"سلام روز شما بخیر","audio_seconds":2.4,"compute_seconds":31.8,"device":"cpu"}
+
+curl http://localhost:8000/health
+# {"status":"ready","device":"cpu","quantised":false,...}
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /` | one-page upload form |
+| `GET /health` | `200` once the model is loaded, `503` before that or if loading failed |
+| `POST /transcribe` | multipart audio file → `{"text": ...}` |
+
+**First start downloads about 3 GB** (the `whisper-large-v3` base weights) and the service
+answers `503` on `/health` until that finishes. The 63 MB adapter is pulled from the Hub at the
+same time. Both are cached in the volume.
+
+**The image is CPU-only.** 4-bit quantisation needs CUDA, so on a machine without a GPU
+`serve.py` loads the base model in float32 instead. It produces the same transcripts, at roughly
+10–30 seconds for a short clip rather than about one second. For a GPU host, change the base
+image in the `Dockerfile` to a CUDA runtime and add `bitsandbytes` to
+`requirements-docker.txt` — `serve.py` already takes the quantised path when a GPU is visible.
+
+Audio is preprocessed by the same `trim_silence` and `peak_normalize` used in training, imported
+from `src/dataset.py` rather than reimplemented, so the service cannot silently drift away from
+the pipeline the reported WER was measured on.
+
+| Environment variable | Default |
+|---|---|
+| `ADAPTER_ID` | `hosseinzr/neyshekar-whisper-large-v3-lora` |
+| `BASE_MODEL` | `openai/whisper-large-v3` |
+| `MAX_UPLOAD_MB` | `25` |
+| `HF_HOME` | `/cache` |
+
+---
 Developed for Persian Speech Recognition Assessment (Neyshekar ASR).

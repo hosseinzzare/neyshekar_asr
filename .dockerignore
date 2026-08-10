@@ -1,0 +1,52 @@
+# Everything the inference image has no use for. Without this the build context includes the
+# 16 MB of CSVs, the virtualenv and the downloaded run artefacts, all of which are sent to the
+# Docker daemon before the build even starts.
+
+.git/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Training data and artefacts — inference needs neither.
+data/
+run_artifacts/
+figures/
+logs/
+runs/
+whisper-large-v3-neyshekar-qlora*/
+smoke-test*/
+smoke-l4*/
+ablation-*/
+ab-*/
+*.log
+
+# Notebooks, documents and the training-side tooling.
+notebooks/
+docs/
+*.ipynb
+*.docx
+*.md
+verify_*.py
+verify_*.bat
+preflight_check.py
+run_ablation.py
+plot_*.py
+analyze_errors.py
+categorise_errors.py
+collect_run_facts.py
+train.py
+data_prep.py
+config.py
+dataset.py
+metrics.py
+model.py
+
+# Temporary clones made by verify_github.bat.
+test_clone/
+verify_clone/
+
+.claude/
+.vscode/
+.idea/
+.DS_Store

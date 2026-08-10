@@ -1,0 +1,32 @@
+# Exact versions for the inference container.
+#
+# requirements.txt declares floors, because the training code has to run on whatever a Colab or
+# Lightning runtime provides. A container has no such constraint: it is built once and shipped,
+# so every version is pinned. That is the whole point of shipping one.
+#
+# bitsandbytes is deliberately absent. It is only needed for 4-bit quantisation, which requires
+# CUDA, and installing it in a CPU image adds weight for something that cannot run. serve.py
+# imports it lazily and only when a GPU is present, so the GPU image can add it without any
+# change to the code.
+
+# Installed from https://download.pytorch.org/whl/cpu in the Dockerfile, not from PyPI. The
+# PyPI wheel of the same version bundles the CUDA runtime, which this image cannot use.
+torch==2.5.1
+transformers==4.46.3
+peft==0.13.2
+accelerate==1.1.1
+soundfile==0.12.1
+librosa==0.10.2.post1
+numpy==1.26.4
+num2fawords==1.1
+
+# pandas is here only because src/dataset.py imports it at module scope, and serve.py imports
+# trim_silence and peak_normalize from that module. Copying those two functions into serve.py
+# would drop the dependency, but then the service and the training pipeline would preprocess
+# audio through two separate implementations that could drift apart without anything failing.
+# Fifty megabytes is the cheaper side of that trade.
+pandas==2.2.3
+
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.17

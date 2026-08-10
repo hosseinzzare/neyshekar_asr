@@ -62,8 +62,14 @@ ZWNJ = "‌"
 
 # Letters Persian writes differently but pronounces the same. A model working from audio has no
 # signal to choose between them; the reference spelling is a convention, not a sound.
+#
+# ع and غ are NOT such a pair and were wrongly grouped here at first. In Persian غ is a velar
+# fricative that has merged with ق, while ع is a glottal stop that is usually not realised at
+# all — غلامان and علامان do not sound alike, so a model confusing them has made a real
+# recognition error, not chosen a different spelling. Removing that group moved one event out of
+# the orthographic column and into substitution.
 HOMOPHONE_GROUPS = [set("اآ"), set("تط"), set("ثسص"), set("حه"),
-                    set("ذزضظ"), set("عغ"), set("ئی"), set("ۀه")]
+                    set("ذزضظ"), set("قغ"), set("ئی"), set("ۀه")]
 
 ORTHOGRAPHIC = {"split", "merge", "zwnj-placement", "attached-preposition", "homophone-letter"}
 

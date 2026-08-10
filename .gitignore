@@ -25,6 +25,10 @@ runs/
 .DS_Store
 Thumbs.db
 
+# Word and Excel lock files. Created while a document is open and deleted on close, so one
+# committed by accident is a file that will never exist again on anyone else's machine.
+~$*
+
 # Tooling scratch dirs
 .claude/
 
@@ -38,3 +42,9 @@ ablation_results.json
 # Temporary verification clone created by verify_github.bat
 test_clone/
 verify_clone/
+
+# Training artefacts downloaded from the model repository for verification.
+# They are already published at huggingface.co/hosseinzr/neyshekar-whisper-large-v3-lora,
+# and collect_run_facts.py reads them straight from there, so there is no reason to carry
+# a 630 KB log in the repository as well.
+run_artifacts/
