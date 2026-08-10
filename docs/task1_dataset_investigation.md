@@ -134,9 +134,33 @@ This is the main way Task 1 earns its place in the project. Neither of these two
 
 ## 5. Distribution analysis
 
-All figures are produced by `plot_dataset.py`, which reads the cleaned dataset and prints the
-same statistics it draws, so the numbers in the text and the numbers in the plots come from one
-computation rather than two.
+All figures are produced by `plot_dataset.py`, which prints the same statistics it draws, so the
+numbers in the text and the numbers in the plots come from one computation rather than two.
+
+**Both distributions are shown.** The brief asks for an investigation of the dataset before any
+training code is written, so the subject is the corpus as delivered — that is the black outline
+on each histogram. The filled bars are the corpus after cleaning, which is what the model
+actually saw. Plotting only the cleaned version would show the result of my own work rather than
+the data under investigation; plotting only the raw version would describe a corpus that was
+never trained on. Overlaying them answers a question neither can answer alone: whether the
+cleaning distorted the data.
+
+It did not. The two outlines are nearly indistinguishable, which is the expected consequence of
+removing 676 records out of 40,008 — 1.7%, drawn almost entirely from duplicates rather than
+from any particular region of the distribution:
+
+| | raw (40,008) | cleaned (39,332) | change |
+|---|---:|---:|---:|
+| mean duration | 5.67 s | 5.69 s | +0.01 s |
+| median duration | 5.04 s | 5.04 s | 0.00 s |
+| max duration | 27.18 s | 27.18 s | 0.00 s |
+| mean transcript (chars) | 53.9 | 54.3 | +0.4 |
+| mean transcript (words) | 10.2 | 10.3 | +0.1 |
+
+Removing 1.7% of the corpus moved the mean duration by 0.01 s and the median by nothing at all.
+The cleaning was targeted rather than a reshaping of the corpus. Had the outlines diverged, that
+would have been a warning that the filtering had introduced a bias worth examining before
+training on the result — which is the reason to draw both rather than assume.
 
 ### Audio duration
 
@@ -184,6 +208,14 @@ memory budget is the same whether the audio is 2 seconds or 20.
 
 The same right-skewed shape, which is expected: transcript length is essentially duration
 multiplied by speech rate, so it inherits the duration distribution's form.
+
+Here the raw and cleaned outlines differ very slightly, and in a direction worth noting: the
+cleaned transcripts are marginally *longer* on average, 54.3 characters against 53.9. That is
+not an error. Number lexicalisation replaced each numeral with its spoken form — `۱۲` became
+`دوازده` — which adds characters to the text while making it a more faithful record of what was
+actually said. A cleaning step that shortened transcripts would deserve scrutiny; one that
+lengthens them by spelling out numbers is doing exactly what it was written to do, and the
++0.4 character shift is the visible trace of the 1,191 rows that contained digits.
 
 The relevant ceiling here is the decoder's, not the encoder's. Whisper generates at most 448
 tokens. The longest transcript in the corpus is 251 characters, which for Persian subword
