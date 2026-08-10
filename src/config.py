@@ -111,15 +111,19 @@ class Config:
     # and 6,779 s over the full 5,900-row split. At EVAL_STEPS=500 that is 12 evaluations and
     # roughly two extra hours; the reported run used --eval_steps 1500, giving 5 evaluation
     # points for 49 minutes of overhead -- enough resolution for the Task 3 curves.
-    EVAL_STEPS = 500
-    SAVE_STEPS = 500
+    # These are the values the published run used. They were originally 500 and passed on the
+    # command line as 1500, which meant a fresh clone would not reproduce the run: twelve
+    # evaluations instead of five, and about two extra hours. Committing what was actually used
+    # is the point of committing them at all.
+    EVAL_STEPS = 1500
+    SAVE_STEPS = 1500
 
     # Cap how many validation rows are used for the PERIODIC in-training evaluations.
     # A fixed 1,500-row subset (deterministically sampled with SEED) keeps every eval point
     # comparable while cutting generate() cost ~4x. Set to None to always use the full split.
     # NOTE: the final reported metrics should be computed on the FULL validation set -- see
     # the --final_full_eval flag in train.py, which does exactly that once at the end.
-    MAX_EVAL_SAMPLES = 1500
+    MAX_EVAL_SAMPLES = 500
     SAVE_TOTAL_LIMIT = 2
     METRIC_FOR_BEST_MODEL = "wer"
     GREATER_IS_BETTER = False
