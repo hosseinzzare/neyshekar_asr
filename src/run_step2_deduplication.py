@@ -17,8 +17,12 @@ from text_cleaner import (
     remove_spaces_and_zwnj
 )
 
-DATASET_PATH = r'E:\neyshekar dataset\data'
-OUTPUT_DIR = r'E:\neyshekar dataset\investigation_results'
+# The dataset location is supplied at run time rather than written into the source; see
+# paths.py for the resolution order.
+from paths import resolve_paths
+DATASET_PATH, OUTPUT_DIR = resolve_paths()
+
+
 MAX_COPIES_PER_LONG_TEXT = 3
 
 def compute_audio_hash(audio_dict):
@@ -157,14 +161,14 @@ def run_deduplication_pipeline():
     print("="*75)
 
     # -------------------------------------------------------------
-    # Save Final Cleaned Dataset to Drive E:
+    # Save Final Cleaned Dataset to the output directory
     # -------------------------------------------------------------
     output_parquet = os.path.join(OUTPUT_DIR, 'dataset_deduplicated_final.parquet')
     df_save = df_final[['id', 'audio', 'text_raw', 'text_step1', 'duration']]
     df_save.to_parquet(output_parquet, index=False)
-    print(f"\n[SAVED] Threshold-downsampled dataset successfully saved to Drive E:\n  --> {output_parquet}")
+    print(f"\n[SAVED] Threshold-downsampled dataset successfully saved to\n  --> {output_parquet}")
 
-    # Save summary report to Drive E:
+    # Save summary report to the output directory
     report_file = os.path.join(OUTPUT_DIR, 'deduplication_pipeline_report.txt')
     with open(report_file, 'w', encoding='utf-8') as f:
         f.write("Neyshekar Dataset - Threshold Down-sampling (Max 3 Copies) Summary Report\n")
@@ -178,7 +182,7 @@ def run_deduplication_pipeline():
         f.write(f"Final Remaining Clean Records:             {final_total}\n")
         f.write(f"Saved Parquet Path:                        {output_parquet}\n")
 
-    print(f"Report saved to Drive E: {report_file}")
+    print(f"Report saved to {report_file}")
 
 if __name__ == '__main__':
     run_deduplication_pipeline()

@@ -18,8 +18,11 @@ from text_cleaner import (
     has_digits
 )
 
-DATASET_PATH = r'E:\neyshekar dataset\data'
-OUTPUT_DIR = r'E:\neyshekar dataset\investigation_results'
+# The dataset location is supplied at run time rather than written into the source; see
+# paths.py for the resolution order.
+from paths import resolve_paths
+DATASET_PATH, OUTPUT_DIR = resolve_paths()
+
 
 def run_investigation():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -76,13 +79,13 @@ def run_investigation():
     print(f"Exact Duplicate Transcripts Post Step 1: {step1_duplicates_count:,} ({step1_duplicates_pct:.2f}%)")
     print("="*65)
 
-    # SAVE STEP 1 INTERMEDIATE PARQUET TO DRIVE E:
+    # SAVE THE STEP 1 INTERMEDIATE PARQUET
     output_parquet = os.path.join(OUTPUT_DIR, 'dataset_step1_normalized.parquet')
     df_to_save = df[['id', 'duration', 'text_raw', 'text_step1']]
     df_to_save.to_parquet(output_parquet, index=False)
-    print(f"\n[SAVED] Step 1 normalized dataset successfully saved to Drive E:\n  --> {output_parquet}")
+    print(f"\n[SAVED] Step 1 normalized dataset successfully saved to\n  --> {output_parquet}")
 
-    # Save summary report to Drive E:
+    # Save summary report to the output directory
     report_file = os.path.join(OUTPUT_DIR, 'step1_investigation_report.txt')
     with open(report_file, 'w', encoding='utf-8') as f:
         f.write("Neyshekar Dataset - Step 1 Text Investigation Report\n")
@@ -96,7 +99,7 @@ def run_investigation():
         f.write(f"Post Step 1 Duplicates: {step1_duplicates_count} ({step1_duplicates_pct:.2f}%)\n")
         f.write(f"Saved Processed File: {output_parquet}\n")
     
-    print(f"Report successfully saved to Drive E: {report_file}")
+    print(f"Report successfully saved to {report_file}")
 
 if __name__ == '__main__':
     run_investigation()

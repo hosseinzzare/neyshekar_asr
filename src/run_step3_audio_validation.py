@@ -21,8 +21,12 @@ from text_cleaner import (
     remove_spaces_and_zwnj
 )
 
-DATASET_PATH = r'E:\neyshekar dataset\data'
-OUTPUT_DIR = r'E:\neyshekar dataset\investigation_results'
+# The dataset location is supplied at run time rather than written into the source; see
+# paths.py for the resolution order.
+from paths import resolve_paths
+DATASET_PATH, OUTPUT_DIR = resolve_paths()
+
+
 MAX_COPIES_PER_LONG_TEXT = 3
 
 def compute_audio_hash(audio_dict):
@@ -183,7 +187,7 @@ def run_audio_validation_pipeline():
     plot_path = os.path.join(OUTPUT_DIR, 'audio_duration_histogram.png')
     plt.savefig(plot_path, dpi=300)
     plt.close()
-    print(f"Histogram saved successfully to Drive E:\n  --> {plot_path}")
+    print(f"Histogram saved successfully to\n  --> {plot_path}")
     
     # -------------------------------------------------------------
     # Summary Report & Output Log
@@ -201,7 +205,7 @@ def run_audio_validation_pipeline():
     print(f"FINAL CLEAN & VALID RECORDS REMAINING:    {final_clean_total:,}")
     print("="*75)
     
-    # Save Report to Drive E:
+    # Save Report to the output directory
     report_path = os.path.join(OUTPUT_DIR, 'audio_validation_report.txt')
     with open(report_path, 'w', encoding='utf-8') as f:
         f.write("Neyshekar Dataset - Audio Validation & Duration Distribution Report\n")
@@ -217,7 +221,7 @@ def run_audio_validation_pipeline():
         f.write(f"Median Audio Duration:                {median_dur:.2f} seconds\n")
         f.write(f"Histogram Image Saved At:             {plot_path}\n")
 
-    print(f"Report saved to Drive E: {report_path}")
+    print(f"Report saved to {report_path}")
 
 if __name__ == '__main__':
     run_audio_validation_pipeline()

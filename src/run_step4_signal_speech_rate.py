@@ -22,8 +22,12 @@ from text_cleaner import (
     remove_spaces_and_zwnj
 )
 
-DATASET_PATH = r'E:\neyshekar dataset\data'
-OUTPUT_DIR = r'E:\neyshekar dataset\investigation_results'
+# The dataset location is supplied at run time rather than written into the source; see
+# paths.py for the resolution order.
+from paths import resolve_paths
+DATASET_PATH, OUTPUT_DIR = resolve_paths()
+
+
 MAX_COPIES_PER_LONG_TEXT = 3
 
 def compute_audio_hash(audio_dict):
@@ -208,7 +212,7 @@ def run_speech_rate_and_signal_analysis():
     # -------------------------------------------------------------
     # STAGE 3: Final Report & Data Export
     # -------------------------------------------------------------
-    print("\n[4/4] Exporting Summary Report to Drive E:...")
+    print("\n[4/4] Exporting Summary Report to the output directory...")
     
     report_file = os.path.join(OUTPUT_DIR, 'speech_rate_signal_report.txt')
     with open(report_file, 'w', encoding='utf-8') as f:

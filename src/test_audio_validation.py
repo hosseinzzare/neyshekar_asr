@@ -10,8 +10,11 @@ import soundfile as sf
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding='utf-8')
 
-DATASET_PATH = r'E:\neyshekar dataset\data'
-OUTPUT_DIR = r'E:\neyshekar dataset\investigation_results'
+# Supplied at run time; see paths.py.
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from paths import resolve_paths
+DATASET_PATH, OUTPUT_DIR = resolve_paths()
+
 
 def test_audio_health():
     print("Loading raw parquet files to test audio integrity and duration...")
