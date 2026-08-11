@@ -48,3 +48,6 @@ verify_clone/
 # and collect_run_facts.py reads them straight from there, so there is no reason to carry
 # a 630 KB log in the repository as well.
 run_artifacts/
+
+test_clips/
+docs/MY EDITED DOCS/

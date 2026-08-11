@@ -1,6 +1,5 @@
 import sys
 import os
-import glob
 import pandas as pd
 import numpy as np
 
@@ -20,7 +19,7 @@ from text_cleaner import (
 
 # The dataset location is supplied at run time rather than written into the source; see
 # paths.py for the resolution order.
-from paths import resolve_paths
+from paths import resolve_paths, find_shards
 DATASET_PATH, OUTPUT_DIR = resolve_paths()
 
 
@@ -28,7 +27,7 @@ def run_investigation():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     print(f"Loading dataset parquet files from: {DATASET_PATH}...")
     
-    parquet_files = sorted(glob.glob(os.path.join(DATASET_PATH, 'train-*.parquet')))
+    parquet_files = find_shards(DATASET_PATH)
     if not parquet_files:
         print(f"Error: No parquet files found in {DATASET_PATH}")
         return

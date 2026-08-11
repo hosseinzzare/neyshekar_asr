@@ -1,65 +1,23 @@
 """
-Root config launcher script.
-Re-exports configuration variables from src/config.py
-"""
-import sys
-import os
+Root launcher for the configuration module.
 
-from src.config import (
-    Config,
-    set_seed,
-    SEED,
-    TRAIN_CSV,
-    VAL_CSV,
-    OUTPUT_DIR,
-    LOGS_DIR,
-    HF_DATASET_NAME,
-    MAP_WRITER_BATCH_SIZE,
-    MODEL_NAME_OR_PATH,
-    LANGUAGE,
-    TASK,
-    SAMPLING_RATE,
-    ENABLE_VAD_TRIM,
-    VAD_TOP_DB,
-    VAD_MARGIN_MS,
-    VAD_MIN_DURATION_S,
-    ENABLE_PEAK_NORM,
-    PEAK_NORM_DB,
-    MAX_DECODE_FAILURE_RATE,
-    USE_QUANTIZATION,
-    USE_BF16_WHEN_UNQUANTIZED,
-    LOAD_IN_4BIT,
-    BNB_4BIT_QUANT_TYPE,
-    BNB_4BIT_COMPUTE_DTYPE,
-    BNB_4BIT_USE_DOUBLE_QUANT,
-    LORA_R,
-    LORA_ALPHA,
-    LORA_DROPOUT,
-    TARGET_MODULES,
-    NUM_EPOCHS,
-    LEARNING_RATE,
-    WARMUP_STEPS,
-    PER_DEVICE_TRAIN_BATCH_SIZE,
-    PER_DEVICE_EVAL_BATCH_SIZE,
-    GRADIENT_ACCUMULATION_STEPS,
-    FP16,
-    GRADIENT_CHECKPOINTING,
-    EVAL_STRATEGY,
-    EVAL_STEPS,
-    SAVE_STEPS,
-    MAX_EVAL_SAMPLES,
-    DATALOADER_NUM_WORKERS,
-    SAVE_TOTAL_LIMIT,
-    METRIC_FOR_BEST_MODEL,
-    GREATER_IS_BETTER,
-    LOAD_BEST_MODEL_AT_END,
-    MAX_STEPS
-)
+src/config.py holds the real definitions; this file exists only so that `python config.py` and
+`from config import ...` work from the repository root, which is where the README tells people
+to run everything.
+
+The re-export is a star import on purpose. It used to be a hand-written list of names, and the
+list had already fallen behind: src/config.py defined 46 module-level constants and this file
+re-exported 45, silently omitting MAX_STEPS. Nothing imported it through here yet, so nothing
+broke — but a shim whose whole job is to mirror another module should not need maintaining every
+time that module gains a line. A star import cannot drift.
+"""
+from src.config import *          # noqa: F401,F403
+from src.config import Config, set_seed, SEED  # noqa: F401  (explicit: used below)
 
 if __name__ == '__main__':
     set_seed(SEED)
     print("Configuration loaded successfully via root config.py:")
-    print(f"  - Model: {MODEL_NAME_OR_PATH}")
-    print(f"  - Language: {LANGUAGE}")
-    print(f"  - Output Dir: {OUTPUT_DIR}")
-    print(f"  - QLoRA Rank (R): {LORA_R}, Alpha: {LORA_ALPHA}")
+    print(f"  - Model: {MODEL_NAME_OR_PATH}")          # noqa: F405
+    print(f"  - Language: {LANGUAGE}")                 # noqa: F405
+    print(f"  - Output Dir: {OUTPUT_DIR}")             # noqa: F405
+    print(f"  - QLoRA Rank (R): {LORA_R}, Alpha: {LORA_ALPHA}")   # noqa: F405

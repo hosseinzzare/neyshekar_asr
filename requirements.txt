@@ -11,7 +11,12 @@
 # alongside the checkpoint.
 
 torch>=2.0.0
-transformers>=4.40.0
+# This floor read >=4.40.0 until the inference image was first built and run. The code calls
+# from_pretrained(dtype=...), which is the 5.x signature -- on 4.x the argument is torch_dtype
+# and the call raises TypeError before a single weight is loaded. So 4.40 was never a version
+# this project could run on, and the header above already said the run used 5.x. The floor now
+# matches the API the code actually uses.
+transformers>=5.0.0
 datasets>=2.18.0
 peft>=0.10.0
 bitsandbytes>=0.43.0

@@ -1,7 +1,6 @@
 import sys
 import os
 import io
-import glob
 import hashlib
 import pandas as pd
 import numpy as np
@@ -24,7 +23,7 @@ from text_cleaner import (
 
 # The dataset location is supplied at run time rather than written into the source; see
 # paths.py for the resolution order.
-from paths import resolve_paths
+from paths import resolve_paths, find_shards
 DATASET_PATH, OUTPUT_DIR = resolve_paths()
 
 
@@ -68,7 +67,7 @@ def run_speech_rate_and_signal_analysis():
     # -------------------------------------------------------------
     # 1. Load Parquet & Run Deduplication + Audio Validation Pipeline
     # -------------------------------------------------------------
-    parquet_files = sorted(glob.glob(os.path.join(DATASET_PATH, 'train-*.parquet')))
+    parquet_files = find_shards(DATASET_PATH)
     print(f"\n[1/4] Loading {len(parquet_files)} dataset parquet files...")
     
     dfs = [pd.read_parquet(f, columns=['id', 'audio', 'text', 'duration']) for f in parquet_files]

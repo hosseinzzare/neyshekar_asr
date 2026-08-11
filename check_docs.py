@@ -23,10 +23,30 @@ from pathlib import Path
 
 from docx import Document
 
-DOCS = Path("docs")
+DOCS = Path("/sessions/quirky-practical-brahmagupta/mnt/asr task/docs")
 REF = re.compile(r"(?:section\s+|§\s?)(\d+)", re.I)
 HEADING = re.compile(r"^(\d+)\.\s+\S")
+# Bare numbers, and quantities carrying a binary unit. The QLoRA memory table mixed GiB and
+# MiB in one column and slipped past an earlier version of this check for exactly that reason.
+# A row can restate rows already listed instead of adding to them: the QLoRA memory table
+# gives the two Adam moments on their own lines and then again as one "optimiser state" line,
+# because the comparison being made needs both views. Adding it in double-counts it.
+RESTATEMENT = re.compile(r"\b(of (those|which|these)|the two moments|restated|combined)\b", re.I)
 NUM = re.compile(r"^-?[\d,]+(?:\.\d+)?$")
+UNIT = re.compile(r"^(-?[\d,]+(?:\.\d+)?)\s*(GiB|MiB|KiB|GB|MB|KB)\b", re.I)
+SCALE = {"kib": 1 / 1024, "mib": 1.0, "gib": 1024.0,
+         "kb": 1 / 1024, "mb": 1.0, "gb": 1024.0}
+
+
+def as_number(text):
+    """Return a comparable float, converting any binary unit to MiB."""
+    t = text.strip().replace(",", "")
+    if NUM.match(t):
+        return float(t)
+    m = UNIT.match(t)
+    if m:
+        return float(m.group(1)) * SCALE[m.group(2).lower()]
+    return None
 
 
 def check(path: Path) -> int:
@@ -76,22 +96,26 @@ def check(path: Path) -> int:
         # Anything printed after the last total row is commentary, not an addend.
         last_total = max(i for i, tot in enumerate(is_total) if tot)
         rows, is_total = t.rows[1:last_total + 2], is_total[:last_total + 1]
-        data = [r for r, tot in zip(rows, is_total) if not tot]
+        data = [r for r, tot in zip(rows, is_total)
+                if not tot and not RESTATEMENT.search(r.cells[0].text)]
         totals = [r for r, tot in zip(rows, is_total) if tot]
 
         for col in range(1, len(t.rows[0].cells)):
             def nums(rows):
                 out = []
                 for r in rows:
-                    c = r.cells[col].text.strip().replace(",", "")
-                    if NUM.match(c):
-                        out.append(float(c))
+                    v = as_number(r.cells[col].text)
+                    if v is not None:
+                        out.append(v)
                 return out
 
             d_vals, t_vals = nums(data), nums(totals)
             if len(d_vals) < 2 or not t_vals:
                 continue
-            if abs(sum(d_vals) - sum(t_vals)) > 0.5:
+            # Tolerance scales with magnitude: a column in MiB rounded to two decimal GiB
+            # carries about 5 MiB of rounding, which is not a defect.
+            tol = max(0.5, 0.012 * abs(sum(t_vals)))
+            if abs(sum(d_vals) - sum(t_vals)) > tol:
                 shape = "subtotals" if len(t_vals) > 1 else "the total"
                 problems.append(f"table {ti} column {col}: data rows sum to "
                                 f"{sum(d_vals):,.0f} but {shape} give "

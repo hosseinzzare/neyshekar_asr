@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<!--
+  Inference demo for the Neyshekar Persian ASR service.
+
+  Every number on this page came from a real request to the container: the five clips were
+  extracted from the validation split with make_test_clip.py, posted to POST /transcribe on a
+  CPU-only container, and scored with the same normaliser the training pipeline uses
+  (src/metrics.py -- punctuation stripped, ZWNJ deliberately preserved).
+
+  Open it from the repository root so the audio paths resolve:  test_clips/val_<id>.wav
+  Regenerate the clips first with:
+      python make_test_clip.py --dataset_path "<your dataset>" --n 5
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Neyshekar ASR — inference demo</title>
+<style>
+  :root {
+    --bg:#faf9f7; --card:#fff; --ink:#1c1917; --muted:#6b645c; --line:#e5e1db;
+    --ok:#0f7b52; --ok-bg:#e6f4ee; --err:#b4341f; --err-bg:#fbeae7; --accent:#8a5a2b;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:36px 20px 60px; background:var(--bg); color:var(--ink);
+    font:15px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width:860px; margin:0 auto; }
+  h1 { font-size:25px; margin:0 0 4px; letter-spacing:-.01em; }
+  .sub { color:var(--muted); font-size:13.5px; margin:0 0 26px; }
+
+  .summary { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
+  .stat {
+    flex:1; min-width:130px; background:var(--card); border:1px solid var(--line);
+    border-radius:9px; padding:13px 15px;
+  }
+  .stat .n { font-size:23px; font-weight:600; letter-spacing:-.02em; }
+  .stat .l { font-size:11.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+
+  .note {
+    background:#fffdf5; border:1px solid #eadfc0; border-left:3px solid var(--accent);
+    border-radius:7px; padding:13px 16px; margin-bottom:26px; font-size:13.5px; color:#4a4139;
+  }
+  .note b { color:var(--ink); }
+
+  .clip {
+    background:var(--card); border:1px solid var(--line); border-radius:11px;
+    padding:17px 19px; margin-bottom:13px;
+  }
+  .head { display:flex; align-items:center; gap:11px; margin-bottom:12px; flex-wrap:wrap; }
+  .id { font:600 13px ui-monospace, SFMono-Regular, Menlo, monospace; color:var(--muted); }
+  .badge { font-size:11.5px; font-weight:600; padding:2.5px 9px; border-radius:20px; }
+  .badge.pass { background:var(--ok-bg); color:var(--ok); }
+  .badge.fail { background:var(--err-bg); color:var(--err); }
+  .cat { font-size:12.5px; color:var(--muted); margin-inline-start:auto; }
+
+  audio { width:100%; height:34px; margin-bottom:13px; }
+
+  .row { display:grid; grid-template-columns:78px 1fr; gap:11px; align-items:baseline;
+         padding:5px 0; }
+  .lab { font-size:11.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+  .fa {
+    direction:rtl; text-align:right; font-size:17px; line-height:1.9;
+    font-family:"Vazirmatn","Segoe UI",Tahoma,sans-serif;
+  }
+  .w { padding:1px 2px; border-radius:3px; }
+  .w.bad { background:var(--err-bg); color:var(--err); font-weight:600;
+           box-shadow:inset 0 -2px 0 rgba(180,52,31,.28); }
+
+  .meta {
+    display:flex; gap:20px; flex-wrap:wrap; margin-top:12px; padding-top:11px;
+    border-top:1px solid var(--line); font-size:12.5px; color:var(--muted);
+  }
+  .meta b { color:var(--ink); font-weight:600; }
+
+  footer { margin-top:30px; font-size:12.5px; color:var(--muted); line-height:1.75; }
+  code { font:12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background:#f0eeea;
+         padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Neyshekar Persian ASR — inference demo</h1>
+  <p class="sub">
+    whisper-large-v3 + QLoRA adapter, served from the CPU-only Docker image.
+    Five clips from the validation split, so the adapter has never trained on this audio.
+    Scored with the project's own normaliser.
+  </p>
+
+  <div class="summary">
+    <div class="stat"><div class="n">2 / 5</div><div class="l">exact matches</div></div>
+    <div class="stat"><div class="n">24.2%</div><div class="l">WER, these five</div></div>
+    <div class="stat"><div class="n">5.5%</div><div class="l">CER, these five</div></div>
+    <div class="stat"><div class="n">~6.7&times;</div><div class="l">slower than real time</div></div>
+  </div>
+
+  <div class="note">
+    <b>Read the 24.2% carefully.</b> The model scores 8.05% WER on the full 5,900-row validation
+    split. Five sentences is not a sample: clip 17098 is three words long, so two errors put it
+    at 66.7% on their own. What these five do show is <b>which</b> errors survive fine-tuning —
+    four of the eight word errors below are Persian compound spacing, one written with a
+    zero-width non-joiner and one without. That is the largest single category Task 4 identified,
+    and it turned up again here on audio the analysis never looked at.
+  </div>
+
+  <!-- 16322 -->
+  <div class="clip">
+    <div class="head">
+      <span class="id">val_16322</span>
+      <span class="badge pass">exact match</span>
+      <span class="cat">no errors</span>
+    </div>
+    <audio controls preload="none" src="test_clips/val_16322.wav"></audio>
+    <div class="row"><div class="lab">reference</div>
+      <div class="fa">فرض کنید برای اولین ماراتن خود تمرین می‌کنید.</div></div>
+    <div class="row"><div class="lab">model</div>
+      <div class="fa">فرض کنید برای اولین ماراتن خود تمرین می‌کنید.</div></div>
+    <div class="meta">
+      <span>WER <b>0.0%</b></span><span>CER <b>0.0%</b></span>
+      <span>5.16 s file &rarr; <b>4.34 s</b> after silence trim</span>
+      <span>compute <b>31.1 s</b></span>
+    </div>
+  </div>
+
+  <!-- 31021 -->
+  <div class="clip">
+    <div class="head">
+      <span class="id">val_31021</span>
+      <span class="badge pass">exact match</span>
+      <span class="cat">no errors</span>
+    </div>
+    <audio controls preload="none" src="test_clips/val_31021.wav"></audio>
+    <div class="row"><div class="lab">reference</div>
+      <div class="fa">خیلی کمتر از آن یکی</div></div>
+    <div class="row"><div class="lab">model</div>
+      <div class="fa">خیلی کمتر از آن یکی</div></div>
+    <div class="meta">
+      <span>WER <b>0.0%</b></span><span>CER <b>0.0%</b></span>
+      <span>3.54 s file &rarr; <b>2.84 s</b> after silence trim</span>
+      <span>compute <b>9.5 s</b></span>
+    </div>
+  </div>
+
+  <!-- 33008 -->
+  <div class="clip">
+    <div class="head">
+      <span class="id">val_33008</span>
+      <span class="badge fail">2 word errors</span>
+      <span class="cat">compound written with a ZWNJ instead of a space</span>
+    </div>
+    <audio controls preload="none" src="test_clips/val_33008.wav"></audio>
+    <div class="row"><div class="lab">reference</div>
+      <div class="fa">کمرمان خم شد زیر <span class="w bad">این</span> <span class="w bad">همه</span> فشار.</div></div>
+    <div class="row"><div class="lab">model</div>
+      <div class="fa">کمرمان خم شد زیر <span class="w bad">این‌همه</span> فشار.</div></div>
+    <div class="meta">
+      <span>WER <b>28.6%</b></span><span>CER <b>4.3%</b></span>
+      <span>3.00 s file &rarr; <b>2.54 s</b> after silence trim</span>
+      <span>compute <b>9.2 s</b></span>
+    </div>
+  </div>
+
+  <!-- 17098 -->
+  <div class="clip">
+    <div class="head">
+      <span class="id">val_17098</span>
+      <span class="badge fail">2 word errors</span>
+      <span class="cat">ZWNJ compound split into two words</span>
+    </div>
+    <audio controls preload="none" src="test_clips/val_17098.wav"></audio>
+    <div class="row"><div class="lab">reference</div>
+      <div class="fa">جدی <span class="w bad">خیلی‌ام</span> عالی</div></div>
+    <div class="row"><div class="lab">model</div>
+      <div class="fa">جدی <span class="w bad">خیلی</span> <span class="w bad">هم</span> عالی</div></div>
+    <div class="meta">
+      <span>WER <b>66.7%</b></span><span>CER <b>14.3%</b></span>
+      <span>1.81 s file &rarr; <b>1.56 s</b> after silence trim</span>
+      <span>compute <b>24.7 s</b></span>
+    </div>
+  </div>
+
+  <!-- 37678 -->
+  <div class="clip">
+    <div class="head">
+      <span class="id">val_37678</span>
+      <span class="badge fail">4 word errors</span>
+      <span class="cat">fastest speech in the set — 99th percentile</span>
+    </div>
+    <audio controls preload="none" src="test_clips/val_37678.wav"></audio>
+    <div class="row"><div class="lab">reference</div>
+      <div class="fa">آراد <span class="w bad">یک</span> دانشمند شده بود و سینا <span class="w bad">یک</span> <span class="w bad">ماجراجوی</span> <span class="w bad">معروف</span>!</div></div>
+    <div class="row"><div class="lab">model</div>
+      <div class="fa">آراد <span class="w bad">یه</span> دانشمند شده بود و سینا <span class="w bad">یه</span> <span class="w bad">ماجراجویی</span> <span class="w bad">معرف</span>.</div></div>
+    <div class="meta">
+      <span>WER <b>40.0%</b></span><span>CER <b>10.3%</b></span>
+      <span>3.43 s file, <b>nothing trimmed</b></span>
+      <span>compute <b>23.6 s</b></span>
+    </div>
+  </div>
+
+  <div class="note" style="margin-top:22px">
+    <b>On val_37678, after listening to it.</b> The two
+    <span style="direction:rtl">یک → یه</span> errors are not the same error. In the first the
+    speaker really does say <span style="direction:rtl">یه</span> and the annotation writes
+    <span style="direction:rtl">یک</span>, so the model transcribed what was said and the scorer
+    counted it wrong; the dataset is not consistent here, and of the 200 rows analysed for Task 4,
+    eight references write <span style="direction:rtl">یک</span> and seven write
+    <span style="direction:rtl">یه</span>. In the second the speaker does say
+    <span style="direction:rtl">یک</span> and the model got it wrong. Three of the four errors on
+    this clip are the model's, not the annotation's.
+  </div>
+
+  <div class="note">
+    <b>Why this clip and not the others.</b> It is the fastest speech in the set by a wide margin
+    — 14.3 characters per second against a validation-split median of 9.3, which puts it at the
+    99th percentile. Quietness, the other obvious suspect, does not separate it: its RMS is
+    &minus;28.1&nbsp;dBFS while val_16322, transcribed perfectly, is quieter still at
+    &minus;29.0. Speaking rate is what distinguishes this clip, and it is the one the model
+    struggled with.
+    <br><br>
+    A second thing falls out of the same measurements. val_31021 peaks at exactly
+    0.0&nbsp;dBFS — it is clipped, one of the 22.10% Task 1 found and left untreated — and it is
+    one of the two clips transcribed perfectly. One clip proves nothing on its own, but it points
+    the same way as the arithmetic in Task 3: clipping is not what drives the remaining errors.
+  </div>
+
+  <footer>
+    Reproduce: <code>docker build -t neyshekar-asr .</code> &rarr;
+    <code>docker run -p 8000:8000 -v neyshekar-cache:/cache neyshekar-asr</code> &rarr;
+    <code>python make_test_clip.py --dataset_path "&lt;dataset&gt;" --n 5</code> &rarr;
+    <code>curl -F "file=@test_clips/val_16322.wav" http://localhost:8000/transcribe</code><br>
+    Timings are single measurements on one CPU container and vary by a factor of five between
+    clips; treat <b>~6.7&times; real time</b> as an order of magnitude, not a benchmark.
+    Audio is not committed to this repository — <code>make_test_clip.py</code> regenerates it
+    from the ids in <code>data/val.csv</code>.
+  </footer>
+
+</div>
+</body>
+</html>

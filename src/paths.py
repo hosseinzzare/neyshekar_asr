@@ -60,3 +60,32 @@ def resolve_paths(description: str = "Neyshekar dataset investigation step"):
 
     os.makedirs(args.output_dir, exist_ok=True)
     return args.dataset_path, args.output_dir
+
+
+def find_shards(dataset_path):
+    """
+    Return the sorted raw train-*.parquet shards under `dataset_path`.
+
+    A HuggingFace snapshot puts the shards in a `data/` subdirectory, but a manual download
+    often leaves them at the top level, and the four investigation scripts each globbed the top
+    level only. Pointing any of them at the snapshot root -- the obvious thing to do, and what
+    the README asks for -- therefore found nothing and exited claiming the dataset was missing.
+    Checking both places is two lines and removes a class of error that looks like a missing
+    dataset rather than a wrong path.
+
+    Only train-*.parquet is matched, deliberately. A recursive sweep for *.parquet also picks up
+    validation shards and any intermediate parquet an earlier step wrote, which would silently
+    change the row counts every figure in Task 1 rests on.
+    """
+    import glob
+
+    for candidate in (dataset_path, os.path.join(dataset_path, "data")):
+        shards = sorted(glob.glob(os.path.join(candidate, "train-*.parquet")))
+        if shards:
+            return shards
+
+    sys.exit(
+        f"ERROR: no train-*.parquet shards under {dataset_path!r}.\n"
+        f"  Looked in that folder and in its data/ subdirectory.\n"
+        f"  Point --dataset_path or NEYSHEKAR_RAW_DIR at the folder holding the shards."
+    )

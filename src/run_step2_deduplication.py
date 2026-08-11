@@ -1,6 +1,5 @@
 import sys
 import os
-import glob
 import hashlib
 import pandas as pd
 import numpy as np
@@ -19,7 +18,7 @@ from text_cleaner import (
 
 # The dataset location is supplied at run time rather than written into the source; see
 # paths.py for the resolution order.
-from paths import resolve_paths
+from paths import resolve_paths, find_shards
 DATASET_PATH, OUTPUT_DIR = resolve_paths()
 
 
@@ -43,7 +42,7 @@ def run_deduplication_pipeline():
     print("="*75)
     
     # Load dataset
-    parquet_files = sorted(glob.glob(os.path.join(DATASET_PATH, 'train-*.parquet')))
+    parquet_files = find_shards(DATASET_PATH)
     print(f"\n[LOADING DATASET] Reading {len(parquet_files)} parquet files...")
     
     dfs = []

@@ -12,9 +12,16 @@
 # Installed from https://download.pytorch.org/whl/cpu in the Dockerfile, not from PyPI. The
 # PyPI wheel of the same version bundles the CUDA runtime, which this image cannot use.
 torch==2.5.1
-transformers==4.46.3
-peft==0.13.2
-accelerate==1.1.1
+# These three were pinned at 4.46.3 / 0.13.2 / 1.1.1 -- versions chosen from memory and never
+# executed, because nothing in the project ran inference from a clean environment until this
+# image was built. The first `docker run` failed at startup: WhisperForConditionalGeneration
+# .__init__() got an unexpected keyword argument 'dtype', because from_pretrained(dtype=...)
+# is the transformers 5.x signature and 4.46 expects torch_dtype. The pins below are the
+# versions the code is actually written against. Building the container is what found this;
+# a pinned dependency that has never been installed is a guess, not a pin.
+transformers==5.14.1
+peft==0.20.0
+accelerate==1.14.0
 soundfile==0.12.1
 librosa==0.10.2.post1
 numpy==1.26.4
