@@ -146,8 +146,33 @@ files carried hard-coded drive paths and were replaced with a single resolver. T
 launchers with no analysis hidden in them. It also states where the work falls short — the exact
 training environment was never captured with `pip freeze`.
 
-[`demo.html`](demo.html) plays five validation clips next to the reference text and the model's
-output, with the differing words marked. Open it after generating the clips (below).
+---
+
+## Hear it
+
+**▶ [Open the live demo](https://hosseinzzare.github.io/neyshekar_asr/demo.html)** — five validation
+clips with a player, the reference text, and what the model produced, differing words marked.
+
+These are real requests to the container: each clip was posted to `POST /transcribe` on the
+CPU-only image and scored with the project's own normaliser. The audio is committed (the corpus
+is CC0-1.0), so nothing needs downloading to try it.
+
+| Clip | Reference → model | WER | What happened |
+|---|---|---:|---|
+| `val_16322` | identical | 0.0% | exact |
+| `val_31021` | identical | 0.0% | exact |
+| `val_33008` | `این همه` → `این‌همه` | 28.6% | compound written with a half-space instead of a space |
+| `val_17098` | `خیلی‌ام` → `خیلی هم` | 66.7% | half-space compound split into two words |
+| `val_37678` | four differences | 40.0% | fastest speech in the set — 99th percentile |
+
+**Two of five are exact. Four of the eight word errors are spacing conventions, not mishearings**
+— the same category Task 4 measured at 25.6%, turning up again on clips the analysis never saw.
+
+The 24.2% overall on these five against 8.05% on the full split is small-sample noise, not a
+contradiction: `val_17098` is three words long, so two errors put it at 66.7% by itself. Five
+sentences is a demonstration, not a measurement.
+
+Regenerate or extend the set with `python make_test_clip.py --dataset_path "<corpus>" --n 5`.
 
 ---
 
@@ -320,8 +345,8 @@ python make_test_clip.py --dataset_path "/path/to/neyshekar dataset" --n 5
 curl -F "file=@test_clips/val_16322.wav" http://localhost:8000/transcribe
 ```
 
-`test_clips/` is not committed — the script regenerates it from the ids in `data/val.csv`.
-Open `demo.html` afterwards to hear the clips against the model's output.
+The five clips used by the live demo are already committed; this regenerates them or writes
+more. Open `demo.html` locally, or use the published page linked above.
 
 ---
 

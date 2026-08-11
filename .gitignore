@@ -49,5 +49,10 @@ verify_clone/
 # a 630 KB log in the repository as well.
 run_artifacts/
 
-test_clips/
+# test_clips/ is deliberately NOT ignored. The five demo clips are committed so demo.html
+# works for anyone who opens the published page without downloading 7.3 GB of corpus first.
+# The dataset is CC0-1.0, so redistributing five clips carries no licence question.
+
+# The hand-styled copies of the documents. Same content as docs/, different typeface and a
+# cover image; two sets of the same five files on one page only raises "which do I read".
 docs/MY EDITED DOCS/
