@@ -159,11 +159,15 @@ is CC0-1.0), so nothing needs downloading to try it.
 
 | Clip | Reference → model | WER | What happened |
 |---|---|---:|---|
-| `val_16322` | identical | 0.0% | exact |
-| `val_31021` | identical | 0.0% | exact |
-| `val_33008` | `این همه` → `این‌همه` | 28.6% | compound written with a half-space instead of a space |
-| `val_17098` | `خیلی‌ام` → `خیلی هم` | 66.7% | half-space compound split into two words |
-| `val_37678` | four differences | 40.0% | fastest speech in the set — 99th percentile |
+| [`val_16322`](test_clips/val_16322.wav) | identical | 0.0% | exact |
+| [`val_31021`](test_clips/val_31021.wav) | identical | 0.0% | exact |
+| [`val_33008`](test_clips/val_33008.wav) | `این همه` → `این‌همه` | 28.6% | compound written with a half-space instead of a space |
+| [`val_17098`](test_clips/val_17098.wav) | `خیلی‌ام` → `خیلی هم` | 66.7% | half-space compound split into two words |
+| [`val_37678`](test_clips/val_37678.wav) | four differences | 40.0% | fastest speech in the set — 99th percentile |
+
+The clip ids link to the audio. Players cannot be embedded in this file — GitHub strips `<audio>`
+from README markdown — so the demo page above is where you can actually listen without leaving
+the browser.
 
 **Two of five are exact. Four of the eight word errors are spacing conventions, not mishearings**
 — the same category Task 4 measured at 25.6%, turning up again on clips the analysis never saw.
